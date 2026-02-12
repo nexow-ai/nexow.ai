@@ -14,10 +14,10 @@ const stats = [
     iconColor: "text-emerald-400",
   },
   {
-    title: "Total P&L",
-    value: "$0.00",
-    change: "No trades yet",
-    icon: DollarSign,
+    title: "Total Return",
+    value: "0.00%",
+    change: "Gross return across all agents",
+    icon: TrendingUp,
     gradient: "from-cyan-500/20 to-cyan-500/5",
     iconBg: "bg-cyan-500/10",
     iconColor: "text-cyan-400",
@@ -25,14 +25,14 @@ const stats = [
   {
     title: "Win Rate",
     value: "—",
-    change: "Need 5+ trades",
-    icon: TrendingUp,
+    change: "Need 5+ signals",
+    icon: DollarSign,
     gradient: "from-amber-500/20 to-amber-500/5",
     iconBg: "bg-amber-500/10",
     iconColor: "text-amber-400",
   },
   {
-    title: "Open Trades",
+    title: "Open Signals",
     value: "0",
     change: "Across all agents",
     icon: Activity,
@@ -49,7 +49,7 @@ export default function DashboardPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">Dashboard</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Overview of your trading agents and performance.
+          Overview of your trading agents and signal performance.
         </p>
       </div>
 
@@ -79,17 +79,17 @@ export default function DashboardPage() {
 
       {/* Content grid */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Recent Trades */}
+        {/* Recent Signals */}
         <Card>
-          <CardTitle>Recent Trades</CardTitle>
+          <CardTitle>Recent Signals</CardTitle>
           <CardContent>
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <div className="mb-4 rounded-2xl bg-zinc-800/50 p-4">
                 <Activity className="h-6 w-6 text-zinc-600" />
               </div>
-              <p className="text-sm font-medium text-zinc-400">No trades yet</p>
+              <p className="text-sm font-medium text-zinc-400">No signals yet</p>
               <p className="mt-1 max-w-xs text-xs text-zinc-600">
-                Create an agent and it will start trading automatically when market conditions align.
+                Create an agent and it will start generating trading signals automatically when market conditions align.
               </p>
               <Link href="/agents/new" className="mt-5">
                 <Button size="sm">
@@ -107,9 +107,9 @@ export default function DashboardPage() {
           <CardContent>
             <div className="mt-2 space-y-3">
               {[
-                { title: "Create a Trading Agent", desc: "Build a new AI-powered agent from a prompt", href: "/agents/new", icon: Bot, color: "emerald" },
-                { title: "View Leaderboard", desc: "See the top-performing agents globally", href: "/leaderboard", icon: TrendingUp, color: "amber" },
-                { title: "Explore Copy Trading", desc: "Follow and copy top agents automatically", href: "/copy", icon: DollarSign, color: "cyan" },
+                { title: "Create a Trading Agent", desc: "Build a new signal-generating agent from a prompt", href: "/agents/new", icon: Bot, color: "emerald" },
+                { title: "View Leaderboard", desc: "See the top-performing agents by return %", href: "/leaderboard", icon: TrendingUp, color: "amber" },
+                { title: "Explore Copy Trading", desc: "Follow and copy top agents' signals", href: "/copy", icon: DollarSign, color: "cyan" },
               ].map((action) => (
                 <Link
                   key={action.title}

@@ -1,17 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const ENGINE_GENERATE_URL = process.env.ENGINE_GENERATE_URL;
-
-/**
- * POST /api/generate-agent
- * Body: { prompt: string }
- *
- * This calls the Python engine's AI factory to generate a strategy config
- * from a natural language prompt. Since PydanticAI runs in Python,
- * we forward the request to a lightweight HTTP endpoint on the engine.
- *
- * For now, we call the OpenAI API directly from Next.js as a simpler approach.
- */
 export async function POST(request: NextRequest) {
   const { prompt } = await request.json();
 
@@ -24,53 +12,55 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
   }
 
-  const systemPrompt = `You are Nexow's Agent Factory. Convert the user's trading idea into a JSON config.
+  const systemPrompt = `You are Nexow's Agent Factory. Convert the user's trading idea into a JSON config with dynamic trading rules.
+
+Agents are SIGNAL PROVIDERS — they emit entry signals (BUY/SELL) and exit signals (CLOSE).
+There is NO position sizing, no volume, no risk management. Agents are compared purely by gross return %.
 
 Return a JSON object with these exact fields:
 {
   "agent_type": "systematic" or "discretionary",
   "name": "Creative agent name",
   "description": "1-2 sentence description",
-  "risk_summary": "e.g. Cautious: 1% risk, 2:1 R:R, 10% max DD",
-  "portfolio_summary": "e.g. EUR/USD (60%) + XAU/USD (40%)",
-  "config": {
-    // For systematic:
-    "strategy": "rsi_reversal|macd_crossover|ema_crossover|bollinger_breakout|rsi_macd_confluence|ema_bollinger_confluence",
-    "portfolio": {
-      "instruments": [{"instrument": "EUR_USD", "allocation_pct": 100, "timeframe": "M5"}],
-      "max_correlation": 0.8,
-      "rebalance_frequency": "daily"
-    },
-    "indicators": {
-      "rsi_period": 14, "rsi_oversold": 30, "rsi_overbought": 70,
-      "macd_fast": 12, "macd_slow": 26, "macd_signal": 9,
-      "ema_fast": 9, "ema_slow": 21,
-      "bb_period": 20, "bb_std": 2.0
-    },
-    "risk": {
-      "risk_per_trade_pct": 1.0,
-      "max_drawdown_pct": 10.0,
-      "max_daily_loss_pct": 3.0,
-      "stop_loss_mode": "fixed_pips",
-      "stop_loss_pips": 20,
-      "take_profit_mode": "risk_reward",
-      "risk_reward_ratio": 2.0,
-      "max_concurrent_trades": 3
-    }
-    
-    // For discretionary, also include:
-    "llm_provider": "openai",
-    "llm_model": "gpt-4o-mini",
-    "personality": "cautious|balanced|aggressive",
-    "focus_areas": ["technical_analysis", "news_sentiment"],
-    "use_web_search": true,
-    "use_news_feed": true,
-    "evaluation_schedule": "every_tick|hourly|daily"
-  }
+  "portfolio_summary": "e.g. EUR/USD + XAU/USD on H1",
+  "config": { ... }
 }
 
+## For SYSTEMATIC agents, config must contain "rules" with buy_rules and sell_rules:
+
+Each rule group has "operator" ("and", "or", "not", "always", "never") and "conditions".
+Each condition has "type" and optional "params".
+
+Available condition types:
+- Price: "price_above", "price_below", "price_change_pct_up", "price_change_pct_down", "price_dropped_pct", "price_near_high", "price_near_low"
+- Candle: "candle_is_green", "candle_is_red", "candle_body_gt", "consecutive_green", "consecutive_red", "doji", "engulfing_bullish", "engulfing_bearish"
+- Indicators: "rsi_above", "rsi_below", "macd_cross_up", "macd_cross_down", "macd_positive", "macd_negative", "ema_cross_up", "ema_cross_down", "price_above_ema", "price_below_ema", "price_above_bb_upper", "price_below_bb_lower", "bb_squeeze"
+- Volume: "volume_above_avg", "volume_below_avg", "volume_spike"
+- Time: "every_candle" (DCA), "every_n_candles"
+- Meta: "has_no_open_trades", "has_open_trades"
+
+## Config structure:
+
+{
+  "portfolio": {"instruments": [{"instrument": "EUR_USD", "timeframe": "M5"}]},
+  "rules": {
+    "buy_rules": {"operator": "and", "conditions": [...]},
+    "sell_rules": {"operator": "and", "conditions": [...]}
+  },
+  "exit": {"stop_loss_pct": 2.0, "take_profit_pct": 4.0}
+}
+
+Exit levels are percentages from entry price:
+- Scalping: SL 0.3-0.5%, TP 0.5-1%
+- Day trading: SL 1-2%, TP 2-4%
+- Swing trading: SL 2-5%, TP 5-10%
+
+## For DISCRETIONARY agents, config includes: llm_provider, llm_model, personality, focus_areas, use_web_search, use_news_feed, evaluation_schedule, portfolio, exit
+
 Available instruments: EUR_USD, GBP_USD, USD_JPY, XAU_USD, USD_CAD, AUD_USD, NZD_USD, USD_CHF
-Only return valid JSON, nothing else.`;
+Available timeframes: M1, M5, M15, M30, H1, H4, D
+
+IMPORTANT: Always generate both buy_rules AND sell_rules. Always include an "exit" object. Only return valid JSON.`;
 
   try {
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
