@@ -52,12 +52,18 @@ class DiscretionaryAgent(AgentStrategy):
             )
 
             signal_type = SignalType(result.get("action", "hold"))
+
+            # Get exit levels from agent config (percentage-based)
+            exit_config = self.config.get("exit", {})
+            sl_pct = result.get("stop_loss_pct", exit_config.get("stop_loss_pct"))
+            tp_pct = result.get("take_profit_pct", exit_config.get("take_profit_pct"))
+
             return Signal(
                 type=signal_type,
                 instrument=result.get("instrument", instrument),
                 confidence=result.get("confidence", 0.5),
-                stop_loss=result.get("stop_loss"),
-                take_profit=result.get("take_profit"),
+                stop_loss_pct=sl_pct if signal_type in (SignalType.BUY, SignalType.SELL) else None,
+                take_profit_pct=tp_pct if signal_type in (SignalType.BUY, SignalType.SELL) else None,
                 reason=result.get("reasoning", "LLM decision"),
             )
         except Exception as e:

@@ -19,13 +19,18 @@ class SignalType(str, Enum):
 
 
 class Signal(BaseModel):
-    """A trading signal emitted by an agent."""
+    """
+    A trading signal emitted by an agent.
+
+    Agents are pure signal providers — they emit entry/exit signals
+    with optional percentage-based stop-loss and take-profit levels.
+    """
 
     type: SignalType
     instrument: str
     confidence: float = 1.0
-    stop_loss: float | None = None
-    take_profit: float | None = None
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
     reason: str = ""
 
 
