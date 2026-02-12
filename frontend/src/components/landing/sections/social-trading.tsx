@@ -1,6 +1,7 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, useScroll, useTransform } from "framer-motion";
+import { useRef } from "react";
 import { Lock, Eye, DollarSign, ArrowDown, Shield, Sparkles } from "lucide-react";
 
 const benefits = [
@@ -115,8 +116,16 @@ function FlowDiagram() {
 }
 
 export function SocialTrading() {
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: sectionRef,
+    offset: ["start end", "end start"],
+  });
+  const leftY = useTransform(scrollYProgress, [0, 1], [50, -30]);
+  const rightY = useTransform(scrollYProgress, [0, 1], [80, -20]);
+
   return (
-    <section className="relative py-32 overflow-hidden">
+    <section ref={sectionRef} className="relative py-32 overflow-hidden">
       <div className="mx-auto max-w-6xl px-6">
         <div className="grid grid-cols-1 gap-16 lg:grid-cols-2 lg:gap-20 items-center">
           {/* Left: content */}
@@ -125,6 +134,7 @@ export function SocialTrading() {
             whileInView={{ opacity: 1, x: 0, filter: "blur(0px)" }}
             viewport={{ once: true, margin: "-80px" }}
             transition={{ duration: 0.7 }}
+            style={{ y: leftY }}
           >
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-4 py-1.5 text-sm font-medium text-cyan-400">
               <Lock className="h-3.5 w-3.5" />
@@ -170,6 +180,7 @@ export function SocialTrading() {
             whileInView={{ opacity: 1, x: 0, filter: "blur(0px)" }}
             viewport={{ once: true, margin: "-80px" }}
             transition={{ duration: 0.7, delay: 0.15 }}
+            style={{ y: rightY }}
             className="flex justify-center"
           >
             <FlowDiagram />

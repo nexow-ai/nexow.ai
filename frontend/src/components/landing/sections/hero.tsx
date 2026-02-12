@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Sparkles } from "lucide-react";
 import Link from "next/link";
-import { motion, useInView } from "framer-motion";
+import { motion, useScroll, useTransform, useInView } from "framer-motion";
 import { useRef, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 
@@ -61,18 +61,46 @@ const stats = [
 ];
 
 export function Hero() {
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: sectionRef,
+    offset: ["start start", "end start"],
+  });
+
+  // Parallax: globe moves slower (stays longer), text moves faster (scrolls away)
+  const globeY = useTransform(scrollYProgress, [0, 1], [0, 150]);
+  const globeScale = useTransform(scrollYProgress, [0, 1], [1, 1.15]);
+  const globeOpacity = useTransform(scrollYProgress, [0, 0.8, 1], [1, 0.6, 0]);
+
+  const textY = useTransform(scrollYProgress, [0, 1], [0, -80]);
+  const textOpacity = useTransform(scrollYProgress, [0, 0.6, 1], [1, 0.3, 0]);
+
+  const badgeY = useTransform(scrollYProgress, [0, 1], [0, -120]);
+
+  const statsY = useTransform(scrollYProgress, [0, 1], [0, -40]);
+  const statsOpacity = useTransform(scrollYProgress, [0, 0.7, 1], [1, 0.5, 0]);
+
   return (
-    <section className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden">
-      <HeroScene />
+    <section
+      ref={sectionRef}
+      className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden"
+    >
+      {/* Globe with parallax */}
+      <motion.div
+        className="absolute inset-0"
+        style={{ y: globeY, scale: globeScale, opacity: globeOpacity }}
+      >
+        <HeroScene />
+      </motion.div>
 
       <div className="relative z-10 mx-auto max-w-7xl px-6 pt-24 pb-16 lg:px-16">
-        {/* Content sits on the left, globe fills the right */}
         <div className="max-w-2xl">
-          {/* Badge */}
+          {/* Badge — fastest parallax */}
           <motion.div
             initial={{ opacity: 0, y: 20, filter: "blur(10px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             transition={{ duration: 0.8, delay: 0.2 }}
+            style={{ y: badgeY }}
             className="mb-8 inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-5 py-2 text-sm font-medium text-emerald-400 backdrop-blur-md shadow-lg shadow-emerald-500/5"
           >
             <Sparkles className="h-3.5 w-3.5" />
@@ -84,6 +112,7 @@ export function Hero() {
             initial={{ opacity: 0, y: 40, filter: "blur(10px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             transition={{ duration: 0.9, delay: 0.4 }}
+            style={{ y: textY, opacity: textOpacity }}
             className="text-5xl font-extrabold leading-[1.05] tracking-tight text-white sm:text-6xl lg:text-7xl"
           >
             The Agentic
@@ -98,6 +127,7 @@ export function Hero() {
             initial={{ opacity: 0, y: 20, filter: "blur(8px)" }}
             animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
             transition={{ duration: 0.7, delay: 0.7 }}
+            style={{ y: textY, opacity: textOpacity }}
             className="mt-8 max-w-xl text-lg leading-relaxed text-zinc-400 sm:text-xl"
           >
             Build discretionary or systematic trading agents with plain English.
@@ -109,27 +139,29 @@ export function Hero() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.9 }}
+            style={{ y: textY, opacity: textOpacity }}
             className="mt-12 flex flex-col items-start gap-4 sm:flex-row"
           >
-          <Link href="/signup">
-            <Button size="lg" className="min-w-[200px] text-base">
-              Start Building
-              <ArrowRight className="ml-1 h-4 w-4" />
-            </Button>
-          </Link>
-          <Link href="#arena">
-            <Button variant="outline" size="lg" className="min-w-[200px] text-base">
-              Explore The Arena
-            </Button>
-          </Link>
-        </motion.div>
+            <Link href="/signup">
+              <Button size="lg" className="min-w-[200px] text-base">
+                Start Building
+                <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            </Link>
+            <Link href="#arena">
+              <Button variant="outline" size="lg" className="min-w-[200px] text-base">
+                Explore The Arena
+              </Button>
+            </Link>
+          </motion.div>
         </div>
 
-        {/* Stats - full width */}
+        {/* Stats — slowest parallax (lags behind) */}
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 1.1 }}
+          style={{ y: statsY, opacity: statsOpacity }}
           className="mt-20 grid grid-cols-2 gap-4 sm:grid-cols-4 max-w-3xl"
         >
           {stats.map((stat) => (

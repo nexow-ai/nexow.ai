@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useMemo, useCallback, useEffect } from "react";
+import { useRef, useMemo, useCallback, useEffect, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { QuadraticBezierLine } from "@react-three/drei";
+import { QuadraticBezierLine, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
-/* ── lat/lng to 3D position on sphere ────────────── */
+/* ── helpers ─────────────────────────────────────── */
 function latLngToVec3(lat: number, lng: number, radius: number): THREE.Vector3 {
   const phi = (90 - lat) * (Math.PI / 180);
   const theta = (lng + 180) * (Math.PI / 180);
@@ -16,162 +16,102 @@ function latLngToVec3(lat: number, lng: number, radius: number): THREE.Vector3 {
   );
 }
 
-/* ── financial hubs ──────────────────────────────── */
-const GLOBE_RADIUS = 2.5;
+/* ── data ────────────────────────────────────────── */
+const R = 2.5;
 
-const hubs: { name: string; lat: number; lng: number }[] = [
-  { name: "New York", lat: 40.7, lng: -74.0 },
-  { name: "London", lat: 51.5, lng: -0.1 },
-  { name: "Tokyo", lat: 35.7, lng: 139.7 },
+interface Hub {
+  name: string;
+  lat: number;
+  lng: number;
+  ticker?: { symbol: string; price: number; change: number };
+}
+
+const hubs: Hub[] = [
+  { name: "New York", lat: 40.7, lng: -74.0, ticker: { symbol: "SPX", price: 6083.5, change: 0.67 } },
+  { name: "London", lat: 51.5, lng: -0.1, ticker: { symbol: "GBP/USD", price: 1.2641, change: -0.12 } },
+  { name: "Tokyo", lat: 35.7, lng: 139.7, ticker: { symbol: "NKY", price: 38842, change: 1.23 } },
   { name: "Singapore", lat: 1.3, lng: 103.8 },
-  { name: "Hong Kong", lat: 22.3, lng: 114.2 },
-  { name: "Frankfurt", lat: 50.1, lng: 8.7 },
+  { name: "Hong Kong", lat: 22.3, lng: 114.2, ticker: { symbol: "BTC", price: 97423, change: 3.21 } },
+  { name: "Frankfurt", lat: 50.1, lng: 8.7, ticker: { symbol: "EUR/USD", price: 1.0847, change: 0.08 } },
   { name: "Sydney", lat: -33.9, lng: 151.2 },
-  { name: "Dubai", lat: 25.2, lng: 55.3 },
+  { name: "Dubai", lat: 25.2, lng: 55.3, ticker: { symbol: "XAU", price: 2937.4, change: 0.89 } },
   { name: "Shanghai", lat: 31.2, lng: 121.5 },
   { name: "Sao Paulo", lat: -23.5, lng: -46.6 },
+  { name: "Mumbai", lat: 19.1, lng: 72.9 },
+  { name: "Toronto", lat: 43.7, lng: -79.4 },
+  { name: "Zurich", lat: 47.4, lng: 8.5 },
+  { name: "Seoul", lat: 37.6, lng: 127.0 },
+  { name: "Chicago", lat: 41.9, lng: -87.6 },
 ];
 
-const tradeRoutes: [number, number][] = [
-  [0, 1], // NY - London
-  [1, 2], // London - Tokyo
-  [2, 3], // Tokyo - Singapore
-  [3, 6], // Singapore - Sydney
-  [4, 5], // Hong Kong - Frankfurt
-  [0, 5], // NY - Frankfurt
-  [1, 7], // London - Dubai
-  [7, 8], // Dubai - Shanghai
-  [0, 9], // NY - Sao Paulo
-  [8, 2], // Shanghai - Tokyo
+const routes: [number, number][] = [
+  [0, 1], [1, 2], [2, 3], [3, 6], [4, 5], [0, 5],
+  [1, 7], [7, 8], [0, 9], [8, 2], [1, 10], [0, 11],
+  [5, 12], [2, 13], [0, 14], [14, 1], [10, 3], [12, 5],
 ];
 
-/* ── wireframe globe ─────────────────────────────── */
-function Globe() {
-  const groupRef = useRef<THREE.Group>(null);
-  const mouseRef = useRef({ x: 0, y: 0 });
-  const { size } = useThree();
+/* ── globe graticule (clean lat/lng lines, no wireframe) */
+function Graticule() {
+  const geometry = useMemo(() => {
+    const points: number[] = [];
+    const segments = 96;
 
-  const handlePointerMove = useCallback(
-    (e: MouseEvent) => {
-      mouseRef.current.x = (e.clientX / size.width) * 2 - 1;
-      mouseRef.current.y = -(e.clientY / size.height) * 2 + 1;
-    },
-    [size]
-  );
+    // Latitude lines every 30 degrees
+    for (let lat = -60; lat <= 60; lat += 30) {
+      for (let i = 0; i <= segments; i++) {
+        const lng = (i / segments) * 360 - 180;
+        const v = latLngToVec3(lat, lng, R * 1.001);
+        points.push(v.x, v.y, v.z);
+        if (i > 0 && i < segments) {
+          points.push(v.x, v.y, v.z);
+        }
+      }
+    }
 
-  useEffect(() => {
-    window.addEventListener("mousemove", handlePointerMove, { passive: true });
-    return () => window.removeEventListener("mousemove", handlePointerMove);
-  }, [handlePointerMove]);
+    // Longitude lines every 30 degrees
+    for (let lng = -180; lng < 180; lng += 30) {
+      for (let i = 0; i <= segments; i++) {
+        const lat = (i / segments) * 180 - 90;
+        const v = latLngToVec3(lat, lng, R * 1.001);
+        points.push(v.x, v.y, v.z);
+        if (i > 0 && i < segments) {
+          points.push(v.x, v.y, v.z);
+        }
+      }
+    }
 
-  useFrame(({ clock }) => {
-    if (!groupRef.current) return;
-    const t = clock.getElapsedTime();
-    // Slow auto-rotation
-    groupRef.current.rotation.y = t * 0.05;
-    // Mouse parallax tilt
-    groupRef.current.rotation.x = THREE.MathUtils.lerp(
-      groupRef.current.rotation.x,
-      mouseRef.current.y * 0.15,
-      0.02
-    );
-    groupRef.current.rotation.z = THREE.MathUtils.lerp(
-      groupRef.current.rotation.z,
-      -mouseRef.current.x * 0.08,
-      0.02
-    );
-  });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+    return geo;
+  }, []);
 
   return (
-    <group ref={groupRef} position={[1.2, 0, 0]}>
-      {/* Wireframe sphere */}
-      <mesh>
-        <sphereGeometry args={[GLOBE_RADIUS, 48, 48]} />
-        <meshBasicMaterial
-          color="#10b981"
-          wireframe
-          transparent
-          opacity={0.08}
-        />
-      </mesh>
-
-      {/* Latitude rings for depth */}
-      <LatitudeRings />
-
-      {/* Atmosphere glow */}
-      <AtmosphereGlow />
-
-      {/* Hub dots */}
-      {hubs.map((hub) => (
-        <HubDot key={hub.name} lat={hub.lat} lng={hub.lng} />
-      ))}
-
-      {/* Trade arcs */}
-      {tradeRoutes.map(([from, to], i) => (
-        <TradeArc
-          key={`${from}-${to}`}
-          from={hubs[from]}
-          to={hubs[to]}
-          index={i}
-        />
-      ))}
-    </group>
+    <lineSegments geometry={geometry}>
+      <lineBasicMaterial color="#10b981" transparent opacity={0.07} depthWrite={false} />
+    </lineSegments>
   );
 }
 
-/* ── extra latitude rings for visual depth ───────── */
-function LatitudeRings() {
-  const ringsRef = useRef<THREE.Group>(null);
-
-  return (
-    <group ref={ringsRef}>
-      {[-60, -30, 0, 30, 60].map((lat) => {
-        const phi = (90 - lat) * (Math.PI / 180);
-        const ringRadius = GLOBE_RADIUS * Math.sin(phi);
-        const y = GLOBE_RADIUS * Math.cos(phi);
-        return (
-          <mesh key={lat} position={[0, y, 0]} rotation={[Math.PI / 2, 0, 0]}>
-            <ringGeometry args={[ringRadius - 0.003, ringRadius + 0.003, 80]} />
-            <meshBasicMaterial
-              color="#10b981"
-              transparent
-              opacity={0.06}
-              side={THREE.DoubleSide}
-            />
-          </mesh>
-        );
-      })}
-    </group>
-  );
-}
-
-/* ── Fresnel atmosphere glow ─────────────────────── */
+/* ── Fresnel atmosphere ──────────────────────────── */
 function AtmosphereGlow() {
-  const shaderMaterial = useMemo(
+  const mat = useMemo(
     () =>
       new THREE.ShaderMaterial({
         vertexShader: `
-          varying vec3 vNormal;
-          varying vec3 vPosition;
+          varying vec3 vNormal; varying vec3 vPos;
           void main() {
             vNormal = normalize(normalMatrix * normal);
-            vPosition = (modelViewMatrix * vec4(position, 1.0)).xyz;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
+            vPos = (modelViewMatrix * vec4(position,1.0)).xyz;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+          }`,
         fragmentShader: `
-          varying vec3 vNormal;
-          varying vec3 vPosition;
+          varying vec3 vNormal; varying vec3 vPos;
           void main() {
-            vec3 viewDir = normalize(-vPosition);
-            float fresnel = 1.0 - dot(viewDir, vNormal);
-            fresnel = pow(fresnel, 3.0);
-            vec3 emerald = vec3(0.063, 0.725, 0.506);
-            vec3 cyan = vec3(0.024, 0.714, 0.831);
-            vec3 color = mix(emerald, cyan, fresnel);
-            gl_FragColor = vec4(color, fresnel * 0.35);
-          }
-        `,
+            float f = 1.0 - dot(normalize(-vPos), vNormal);
+            f = pow(f, 3.5);
+            vec3 c = mix(vec3(0.063,0.725,0.506), vec3(0.024,0.714,0.831), f);
+            gl_FragColor = vec4(c, f * 0.45);
+          }`,
         transparent: true,
         side: THREE.FrontSide,
         depthWrite: false,
@@ -181,90 +121,127 @@ function AtmosphereGlow() {
   );
 
   return (
-    <mesh material={shaderMaterial}>
-      <sphereGeometry args={[GLOBE_RADIUS * 1.02, 48, 48]} />
+    <mesh material={mat}>
+      <sphereGeometry args={[R * 1.015, 64, 64]} />
     </mesh>
   );
 }
 
-/* ── glowing hub dot ─────────────────────────────── */
-function HubDot({ lat, lng }: { lat: number; lng: number }) {
-  const ref = useRef<THREE.Mesh>(null);
-  const pos = useMemo(() => latLngToVec3(lat, lng, GLOBE_RADIUS), [lat, lng]);
+/* ── hub dot with pulse ring + optional price label ─ */
+function HubDot({ hub, index }: { hub: Hub; index: number }) {
+  const dotRef = useRef<THREE.Mesh>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
+  const pos = useMemo(() => latLngToVec3(hub.lat, hub.lng, R * 1.003), [hub.lat, hub.lng]);
+  const labelPos = useMemo(() => latLngToVec3(hub.lat, hub.lng, R * 1.1), [hub.lat, hub.lng]);
+
+  const [price, setPrice] = useState(hub.ticker?.price ?? 0);
+  useEffect(() => {
+    if (!hub.ticker) return;
+    const iv = setInterval(() => {
+      setPrice((p) => p + hub.ticker!.price * (Math.random() - 0.5) * 0.0003);
+    }, 1500 + index * 300);
+    return () => clearInterval(iv);
+  }, [hub.ticker, index]);
 
   useFrame(({ clock }) => {
-    if (!ref.current) return;
-    const s = 1 + Math.sin(clock.getElapsedTime() * 2 + lat) * 0.3;
-    ref.current.scale.setScalar(s);
+    const t = clock.getElapsedTime();
+    if (dotRef.current) {
+      dotRef.current.scale.setScalar(1 + Math.sin(t * 2.5 + index * 1.2) * 0.2);
+    }
+    if (ringRef.current) {
+      const phase = ((t * 0.4 + index * 0.6) % 2.5) / 2.5;
+      ringRef.current.scale.setScalar(1 + phase * 4);
+      (ringRef.current.material as THREE.MeshBasicMaterial).opacity = 0.25 * (1 - phase);
+    }
   });
 
+  const quat = useMemo(() => {
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), pos.clone().normalize());
+    return q;
+  }, [pos]);
+
+  const formatPrice = (p: number) => {
+    if (p > 10000) return p.toFixed(0);
+    if (p > 100) return p.toFixed(1);
+    return p.toFixed(4);
+  };
+
   return (
-    <mesh ref={ref} position={pos}>
-      <sphereGeometry args={[0.04, 12, 12]} />
-      <meshBasicMaterial
-        color="#34d399"
-        transparent
-        opacity={0.9}
-      />
-    </mesh>
+    <group>
+      <mesh ref={dotRef} position={pos}>
+        <sphereGeometry args={[0.04, 12, 12]} />
+        <meshBasicMaterial color="#34d399" />
+      </mesh>
+
+      <mesh ref={ringRef} position={pos} quaternion={quat}>
+        <ringGeometry args={[0.05, 0.065, 32]} />
+        <meshBasicMaterial color="#10b981" transparent opacity={0.25} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+
+      {hub.ticker && (
+        <Html position={labelPos} center distanceFactor={7} style={{ pointerEvents: "none", userSelect: "none" }} occlude={false}>
+          <div className="whitespace-nowrap rounded-md bg-zinc-900/80 backdrop-blur-sm border border-zinc-800/50 px-2 py-1 shadow-lg shadow-black/30">
+            <span className="text-[10px] font-bold text-zinc-300 mr-1.5">{hub.ticker.symbol}</span>
+            <span className="text-[10px] font-mono text-zinc-100">{formatPrice(price)}</span>
+            <span className={`text-[9px] font-mono ml-1 ${hub.ticker.change >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+              {hub.ticker.change >= 0 ? "+" : ""}{hub.ticker.change.toFixed(2)}%
+            </span>
+          </div>
+        </Html>
+      )}
+    </group>
   );
 }
 
-/* ── animated trade arc ──────────────────────────── */
-function TradeArc({
-  from,
-  to,
-  index,
-}: {
-  from: { lat: number; lng: number };
-  to: { lat: number; lng: number };
-  index: number;
-}) {
-  const lineRef = useRef<THREE.Mesh & { material?: THREE.LineDashedMaterial }>(null);
+/* ── trade arc with traveling light ──────────────── */
+function TradeArc({ from, to, index }: { from: Hub; to: Hub; index: number }) {
+  const lineRef = useRef<any>(null);
+  const particleRef = useRef<THREE.Mesh>(null);
 
-  const startVec = useMemo(
-    () => latLngToVec3(from.lat, from.lng, GLOBE_RADIUS),
-    [from.lat, from.lng]
-  );
-  const endVec = useMemo(
-    () => latLngToVec3(to.lat, to.lng, GLOBE_RADIUS),
-    [to.lat, to.lng]
-  );
-
-  // Mid-point elevated above the globe surface
+  const startVec = useMemo(() => latLngToVec3(from.lat, from.lng, R), [from]);
+  const endVec = useMemo(() => latLngToVec3(to.lat, to.lng, R), [to]);
   const midVec = useMemo(() => {
-    const mid = new THREE.Vector3()
-      .addVectors(startVec, endVec)
-      .multiplyScalar(0.5);
-    const dist = startVec.distanceTo(endVec);
-    const elevation = GLOBE_RADIUS + dist * 0.35;
-    mid.normalize().multiplyScalar(elevation);
+    const mid = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5);
+    mid.normalize().multiplyScalar(R + startVec.distanceTo(endVec) * 0.3);
     return mid;
   }, [startVec, endVec]);
+  const curve = useMemo(() => new THREE.QuadraticBezierCurve3(startVec, midVec, endVec), [startVec, midVec, endVec]);
 
   useFrame(({ clock }) => {
-    if (!lineRef.current) return;
-    const mat = lineRef.current.material as THREE.Material & { dashOffset?: number; opacity?: number };
-    if (mat && "dashOffset" in mat) {
-      mat.dashOffset = -(clock.getElapsedTime() * 0.5 + index * 0.7);
+    if (lineRef.current?.material && "dashOffset" in lineRef.current.material) {
+      lineRef.current.material.dashOffset = -(clock.getElapsedTime() * 0.6 + index * 0.8);
+    }
+    if (particleRef.current) {
+      const t = ((clock.getElapsedTime() * 0.15 + index * 0.12) % 1);
+      particleRef.current.position.copy(curve.getPoint(t));
+      const brightness = Math.sin(t * Math.PI);
+      (particleRef.current.material as THREE.MeshBasicMaterial).opacity = brightness * 0.9;
+      particleRef.current.scale.setScalar(0.7 + brightness * 0.5);
     }
   });
 
   return (
-    <QuadraticBezierLine
-      ref={lineRef as never}
-      start={startVec}
-      end={endVec}
-      mid={midVec}
-      color="#10b981"
-      opacity={0.4}
-      transparent
-      lineWidth={1.5}
-      dashed
-      dashScale={8}
-      dashSize={0.4}
-      gapSize={0.3}
-    />
+    <group>
+      <QuadraticBezierLine
+        ref={lineRef}
+        start={startVec}
+        end={endVec}
+        mid={midVec}
+        color="#10b981"
+        opacity={0.2}
+        transparent
+        lineWidth={1}
+        dashed
+        dashScale={10}
+        dashSize={0.3}
+        gapSize={0.3}
+      />
+      <mesh ref={particleRef}>
+        <sphereGeometry args={[0.03, 8, 8]} />
+        <meshBasicMaterial color="#34d399" transparent opacity={0.9} blending={THREE.AdditiveBlending} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
@@ -272,8 +249,29 @@ function TradeArc({
 function Scene() {
   return (
     <>
-      <ambientLight intensity={0.1} />
-      <Globe />
+      <ambientLight intensity={0.05} />
+
+      <group position={[1.2, 0, 0]}>
+        {/* Clean wireframe sphere — 28 segments for visible but elegant cells */}
+        <mesh>
+          <sphereGeometry args={[R, 28, 28]} />
+          <meshBasicMaterial color="#10b981" wireframe transparent opacity={0.06} depthWrite={false} />
+        </mesh>
+
+        <AtmosphereGlow />
+
+        {hubs.map((hub, i) => <HubDot key={hub.name} hub={hub} index={i} />)}
+        {routes.map(([from, to], i) => <TradeArc key={`r-${from}-${to}`} from={hubs[from]} to={hubs[to]} index={i} />)}
+      </group>
+
+      <OrbitControls
+        enableZoom={false}
+        enablePan={false}
+        autoRotate
+        autoRotateSpeed={0.4}
+        minPolarAngle={Math.PI * 0.25}
+        maxPolarAngle={Math.PI * 0.75}
+      />
     </>
   );
 }
@@ -289,12 +287,10 @@ export function HeroScene() {
       >
         <Scene />
       </Canvas>
-      {/* Overlays for text readability */}
-      <div className="pointer-events-none absolute inset-0 bg-zinc-950/40" />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-zinc-950/30 via-transparent to-zinc-950" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_65%_50%,transparent_30%,rgba(5,5,7,0.7)_70%)]" />
-      {/* Extra left-side darkening so text on the left is crisp */}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-zinc-950/70 via-zinc-950/20 to-transparent" />
+      <div className="pointer-events-none absolute inset-0 bg-zinc-950/30" />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-zinc-950/20 via-transparent to-zinc-950" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_65%_50%,transparent_30%,rgba(5,5,7,0.6)_70%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-zinc-950/60 via-zinc-950/15 to-transparent" />
     </div>
   );
 }

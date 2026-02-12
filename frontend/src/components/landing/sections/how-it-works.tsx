@@ -1,6 +1,7 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, useScroll, useTransform } from "framer-motion";
+import { useRef } from "react";
 import { MessageSquareText, Rocket, Trophy } from "lucide-react";
 
 const steps = [
@@ -43,14 +44,22 @@ const steps = [
 ];
 
 export function HowItWorks() {
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: sectionRef,
+    offset: ["start end", "end start"],
+  });
+  const headingY = useTransform(scrollYProgress, [0, 1], [40, -30]);
+
   return (
-    <section className="relative py-32 overflow-hidden">
+    <section ref={sectionRef} className="relative py-32 overflow-hidden">
       <div className="mx-auto max-w-6xl px-6">
         <motion.div
           initial={{ opacity: 0, y: 40, filter: "blur(10px)" }}
           whileInView={{ opacity: 1, y: 0, filter: "blur(0px)" }}
           viewport={{ once: true, margin: "-80px" }}
           transition={{ duration: 0.7 }}
+          style={{ y: headingY }}
           className="text-center mb-20"
         >
           <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
