@@ -1,1 +1,1 @@
-"""Broker layer — Oanda v20 API integration."""
+"""Broker layer — market data providers."""
