@@ -1,0 +1,69 @@
+{
+  "family": "nexow-engine",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/nexow-engine-execution-role",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/nexow-engine-task-role",
+  "containerDefinitions": [
+    {
+      "name": "nexow-engine",
+      "image": "ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/nexow-engine:latest",
+      "essential": true,
+      "secrets": [
+        {
+          "name": "SUPABASE_URL",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/SUPABASE_URL"
+        },
+        {
+          "name": "SUPABASE_PUBLISHABLE_KEY",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/SUPABASE_PUBLISHABLE_KEY"
+        },
+        {
+          "name": "SUPABASE_SECRET_KEY",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/SUPABASE_SECRET_KEY"
+        },
+        {
+          "name": "OANDA_API_URL",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/OANDA_API_URL"
+        },
+        {
+          "name": "OANDA_ACCOUNT_ID",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/OANDA_ACCOUNT_ID"
+        },
+        {
+          "name": "OANDA_API_TOKEN",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/OANDA_API_TOKEN"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/OPENAI_API_KEY"
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/ANTHROPIC_API_KEY"
+        },
+        {
+          "name": "TAVILY_API_KEY",
+          "valueFrom": "arn:aws:ssm:eu-west-1:ACCOUNT_ID:parameter/nexow/TAVILY_API_KEY"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/nexow-engine",
+          "awslogs-region": "eu-west-1",
+          "awslogs-stream-prefix": "engine"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c 'print(\"ok\")' || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      }
+    }
+  ]
+}
