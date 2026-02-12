@@ -6,6 +6,29 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[];
 
+export interface InstrumentAllocation {
+  instrument: string;
+  allocation_pct: number;
+  timeframe: string;
+}
+
+export interface RiskConfig {
+  risk_per_trade_pct?: number;
+  max_position_size_pct?: number;
+  max_drawdown_pct?: number;
+  max_daily_loss_pct?: number;
+  stop_loss_mode?: "fixed_pips" | "atr_based" | "trailing" | "none";
+  stop_loss_pips?: number | null;
+  stop_loss_atr_multiplier?: number;
+  trailing_stop_pips?: number | null;
+  take_profit_mode?: "fixed_pips" | "risk_reward" | "atr_based" | "none";
+  take_profit_pips?: number | null;
+  risk_reward_ratio?: number;
+  take_profit_atr_multiplier?: number;
+  max_concurrent_trades?: number;
+  max_correlated_exposure_pct?: number;
+}
+
 export type Database = {
   public: {
     Tables: {
@@ -40,10 +63,15 @@ export type Database = {
           config: Json;
           prompt: string | null;
           instrument: string;
+          instruments: InstrumentAllocation[];
           timeframe: string;
           status: "active" | "paused" | "killed";
           max_drawdown_pct: number;
           risk_per_trade_pct: number;
+          risk_config: RiskConfig;
+          llm_provider: string;
+          llm_model: string;
+          evaluation_schedule: string;
           created_at: string;
           updated_at: string;
         };
@@ -55,10 +83,15 @@ export type Database = {
           config?: Json;
           prompt?: string | null;
           instrument?: string;
+          instruments?: InstrumentAllocation[];
           timeframe?: string;
           status?: "active" | "paused" | "killed";
           max_drawdown_pct?: number;
           risk_per_trade_pct?: number;
+          risk_config?: RiskConfig;
+          llm_provider?: string;
+          llm_model?: string;
+          evaluation_schedule?: string;
         };
         Update: {
           name?: string;
@@ -67,10 +100,15 @@ export type Database = {
           config?: Json;
           prompt?: string | null;
           instrument?: string;
+          instruments?: InstrumentAllocation[];
           timeframe?: string;
           status?: "active" | "paused" | "killed";
           max_drawdown_pct?: number;
           risk_per_trade_pct?: number;
+          risk_config?: RiskConfig;
+          llm_provider?: string;
+          llm_model?: string;
+          evaluation_schedule?: string;
         };
       };
       trades: {
@@ -159,6 +197,12 @@ export type Database = {
           allocation_pct?: number;
           status?: "active" | "paused";
         };
+      };
+    };
+    Functions: {
+      check_username_available: {
+        Args: { desired_username: string };
+        Returns: boolean;
       };
     };
   };

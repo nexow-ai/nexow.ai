@@ -26,16 +26,32 @@ CREATE INDEX idx_profiles_username ON profiles(username);
 -- Auto-create profile on signup
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+    _username TEXT;
 BEGIN
-    INSERT INTO profiles (id, username, display_name)
+    _username := COALESCE(
+        NEW.raw_user_meta_data->>'username',
+        split_part(NEW.email, '@', 1)
+    );
+
+    -- Ensure uniqueness by appending a short UUID fragment on conflict
+    IF EXISTS (SELECT 1 FROM public.profiles WHERE username = _username) THEN
+        _username := _username || '_' || substr(gen_random_uuid()::text, 1, 8);
+    END IF;
+
+    INSERT INTO public.profiles (id, username, display_name)
     VALUES (
         NEW.id,
-        COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1)),
-        COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1))
+        _username,
+        COALESCE(NEW.raw_user_meta_data->>'display_name', _username)
     );
+
+    RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+    RAISE LOG 'handle_new_user failed for user %: %', NEW.id, SQLERRM;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
@@ -156,6 +172,9 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Profiles are publicly readable"
     ON profiles FOR SELECT USING (true);
 
+CREATE POLICY "Users can insert own profile"
+    ON profiles FOR INSERT WITH CHECK (auth.uid() = id);
+
 CREATE POLICY "Users can update own profile"
     ON profiles FOR UPDATE USING (auth.uid() = id);
 
@@ -242,6 +261,18 @@ CREATE POLICY "Copiers can update own subscriptions"
 
 CREATE POLICY "Copiers can delete own subscriptions"
     ON copy_subscriptions FOR DELETE USING (auth.uid() = copier_id);
+
+-- ============================================
+-- Username availability check (public RPC)
+-- ============================================
+CREATE OR REPLACE FUNCTION check_username_available(desired_username TEXT)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN NOT EXISTS (
+        SELECT 1 FROM public.profiles WHERE username = lower(trim(desired_username))
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- ============================================
 -- Enable Realtime

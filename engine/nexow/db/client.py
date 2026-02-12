@@ -18,7 +18,7 @@ class SupabaseClient:
     def __init__(self) -> None:
         self._client: Client = create_client(
             settings.supabase_url,
-            settings.supabase_service_role_key,
+            settings.supabase_secret_key,
         )
 
     @property
@@ -117,15 +117,19 @@ class SupabaseClient:
     # ------------------------------------------------------------------
 
     def get_pending_agents(self) -> list[dict[str, Any]]:
-        """Fetch agents that have a prompt but empty config (need AI generation)."""
+        """Fetch agents that have a prompt but status='paused' and empty config."""
         response = (
             self._client.table("agents")
             .select("*")
-            .neq("prompt", None)
-            .eq("config", "{}")
+            .not_("prompt", "is", "null")
+            .eq("status", "paused")
             .execute()
         )
-        return response.data
+        # Filter client-side: only agents whose config is empty ({} or null)
+        return [
+            a for a in response.data
+            if not a.get("config") or a["config"] == {} or a["config"] == "{}"
+        ]
 
 
 db = SupabaseClient()
