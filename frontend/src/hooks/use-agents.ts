@@ -48,25 +48,25 @@ export function useAgent(id: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetch() {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("agents")
-        .select("*")
-        .eq("id", id)
-        .single();
+  const fetchAgent = useCallback(async () => {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("agents")
+      .select("*")
+      .eq("id", id)
+      .single();
 
-      if (error) {
-        setError(error.message);
-      } else {
-        setAgent(data);
-      }
-      setLoading(false);
+    if (error) {
+      setError(error.message);
+    } else {
+      setAgent(data);
     }
-
-    fetch();
+    setLoading(false);
   }, [id]);
 
-  return { agent, loading, error };
+  useEffect(() => {
+    fetchAgent();
+  }, [fetchAgent]);
+
+  return { agent, loading, error, refetch: fetchAgent };
 }
