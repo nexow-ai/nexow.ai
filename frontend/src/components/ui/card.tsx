@@ -3,14 +3,20 @@ import type { HTMLAttributes } from "react";
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
   hover?: boolean;
+  glow?: "emerald" | "cyan" | "purple" | "none";
+  glass?: boolean;
 }
 
-export function Card({ className, hover, children, ...props }: CardProps) {
+export function Card({ className, hover, glow = "none", glass, children, ...props }: CardProps) {
   return (
     <div
       className={cn(
-        "rounded-xl border border-zinc-800 bg-zinc-900/50 p-6",
-        hover && "transition-colors hover:border-zinc-700 hover:bg-zinc-900",
+        "rounded-2xl border border-zinc-800/60 bg-zinc-900/40 p-6",
+        "backdrop-blur-sm",
+        glass && "glass",
+        hover && "glass-hover cursor-pointer",
+        glow === "emerald" && "glow-emerald",
+        glow === "cyan" && "glow-cyan",
         className
       )}
       {...props}
@@ -30,7 +36,7 @@ export function CardHeader({ className, children, ...props }: HTMLAttributes<HTM
 
 export function CardTitle({ className, children, ...props }: HTMLAttributes<HTMLHeadingElement>) {
   return (
-    <h3 className={cn("text-lg font-semibold text-zinc-100", className)} {...props}>
+    <h3 className={cn("text-lg font-semibold tracking-tight text-zinc-50", className)} {...props}>
       {children}
     </h3>
   );
@@ -38,7 +44,7 @@ export function CardTitle({ className, children, ...props }: HTMLAttributes<HTML
 
 export function CardDescription({ className, children, ...props }: HTMLAttributes<HTMLParagraphElement>) {
   return (
-    <p className={cn("text-sm text-zinc-400", className)} {...props}>
+    <p className={cn("text-sm leading-relaxed text-zinc-400", className)} {...props}>
       {children}
     </p>
   );
