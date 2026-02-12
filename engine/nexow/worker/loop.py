@@ -10,9 +10,7 @@ from nexow.ai.factory import generate_strategy
 from nexow.agents.portfolio import PortfolioAgent
 from nexow.broker.oanda import OandaClient
 from nexow.config import settings
-from nexow.copy.manager import CopyManager
 from nexow.db.client import SupabaseClient
-from nexow.risk.guardrails import RiskGuardrails
 from nexow.worker.executor import AgentExecutor
 
 logger = structlog.get_logger(__name__)
@@ -24,17 +22,15 @@ class WorkerLoop:
 
     Every tick:
     1. Process pending agents (generate config from prompt)
-    2. Fetch all active agents from Supabase
-    3. For each agent, build a PortfolioAgent and evaluate each instrument
-    4. Execute signals through the AgentExecutor
+    2. Sync open trades (check %-based SL/TP against live prices)
+    3. Fetch all active agents
+    4. For each agent, evaluate each instrument and record signals
     """
 
     def __init__(self) -> None:
         self.db = SupabaseClient()
-        self.broker = OandaClient()
-        self.copy_manager = CopyManager(self.db, self.broker)
-        self.risk = RiskGuardrails(self.db)
-        self.executor = AgentExecutor(self.db, self.broker, self.copy_manager, self.risk)
+        self.market = OandaClient()
+        self.executor = AgentExecutor(self.db)
         self._running = False
 
     async def start(self) -> None:
@@ -54,7 +50,7 @@ class WorkerLoop:
         """Gracefully stop the worker loop."""
         logger.info("worker_stopping")
         self._running = False
-        await self.broker.close()
+        await self.market.close()
 
     async def _process_pending(self) -> None:
         """Check for newly created agents that need AI config generation."""
@@ -72,11 +68,9 @@ class WorkerLoop:
             try:
                 result = await generate_strategy(prompt)
 
-                # Extract portfolio instruments for the DB
                 config = result.config
                 portfolio = config.get("portfolio", {})
                 instruments = portfolio.get("instruments", [])
-                risk = config.get("risk", {})
 
                 update_data: dict = {
                     "name": result.name,
@@ -91,20 +85,83 @@ class WorkerLoop:
                     update_data["instrument"] = instruments[0].get("instrument", "EUR_USD")
                     update_data["timeframe"] = instruments[0].get("timeframe", "M5")
 
-                if risk:
-                    update_data["risk_config"] = risk
-                    update_data["max_drawdown_pct"] = risk.get("max_drawdown_pct", 10.0)
-                    update_data["risk_per_trade_pct"] = risk.get("risk_per_trade_pct", 1.0)
-
                 self.db.update_agent_config(agent["id"], config)
                 self.db.client.table("agents").update(update_data).eq("id", agent["id"]).execute()
                 logger.info("agent_activated", agent_id=agent["id"], name=result.name)
             except Exception as e:
                 logger.error("agent_generation_failed", agent_id=agent["id"], error=str(e))
 
+    async def _sync_trades(self) -> None:
+        """
+        Check percentage-based SL/TP for all open trades.
+
+        For each open trade that has a stop_loss_pct or take_profit_pct,
+        fetch the current price and close the trade if the level was hit.
+        """
+        try:
+            open_trades = self.db.get_all_open_trades()
+            if not open_trades:
+                return
+
+            # Group by instrument to minimise price fetches
+            by_instrument: dict[str, list[dict]] = {}
+            for trade in open_trades:
+                inst = trade["instrument"]
+                by_instrument.setdefault(inst, []).append(trade)
+
+            for inst, trades in by_instrument.items():
+                try:
+                    price = await self.market.get_price(inst)
+                except Exception:
+                    continue
+
+                for trade in trades:
+                    sl_pct = float(trade["stop_loss_pct"]) if trade.get("stop_loss_pct") else None
+                    tp_pct = float(trade["take_profit_pct"]) if trade.get("take_profit_pct") else None
+
+                    if sl_pct is None and tp_pct is None:
+                        continue
+
+                    entry = float(trade["entry_price"])
+                    direction = trade["direction"]
+
+                    # Calculate current return %
+                    if direction == "buy":
+                        current_return = ((price - entry) / entry) * 100
+                    else:
+                        current_return = ((entry - price) / entry) * 100
+
+                    exit_triggered = False
+                    exit_reason = ""
+
+                    # Stop-loss: return drops below -sl_pct
+                    if sl_pct is not None and current_return <= -sl_pct:
+                        exit_triggered = True
+                        exit_reason = "SL"
+
+                    # Take-profit: return rises above +tp_pct
+                    if tp_pct is not None and current_return >= tp_pct:
+                        exit_triggered = True
+                        exit_reason = "TP"
+
+                    if exit_triggered:
+                        self.db.close_trade(trade["id"], price, current_return)
+                        logger.info(
+                            "trade_sl_tp_hit",
+                            trade_id=trade["id"][:8],
+                            instrument=inst,
+                            exit_price=price,
+                            return_pct=round(current_return, 4),
+                            reason=exit_reason,
+                        )
+
+        except Exception as e:
+            logger.debug("trade_sync_error", error=str(e))
+
     async def _tick(self) -> None:
         """Execute one tick of the worker loop."""
         await self._process_pending()
+        await self._sync_trades()
 
         agents = self.db.get_active_agents()
         if not agents:
@@ -120,21 +177,17 @@ class WorkerLoop:
                     instrument = inst_config["instrument"]
                     timeframe = inst_config.get("timeframe", "M5")
 
-                    # Check evaluation schedule for discretionary agents
                     schedule = agent.get("evaluation_schedule", "every_tick")
                     if schedule != "every_tick" and agent.get("type") == "discretionary":
-                        # Skip this tick for scheduled agents (simplified; needs time tracking)
                         continue
 
-                    candles = await self.broker.get_candles(
+                    candles = await self.market.get_candles(
                         instrument=instrument,
                         granularity=timeframe,
                     )
-                    current_price = await self.broker.get_price(instrument)
+                    current_price = await self.market.get_price(instrument)
 
-                    await self.executor.execute(
-                        agent, candles, current_price, portfolio
-                    )
+                    await self.executor.execute(agent, candles, current_price)
 
             except Exception as e:
                 logger.error(

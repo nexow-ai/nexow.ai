@@ -63,18 +63,20 @@ class SupabaseClient:
     # ------------------------------------------------------------------
 
     def insert_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
-        """Insert a new trade record."""
+        """Insert a new trade record (entry signal)."""
         response = self._client.table("trades").insert(trade).execute()
         return response.data[0]
 
-    def close_trade(self, trade_id: str, exit_price: float, pnl: float) -> None:
-        """Close an open trade."""
+    def close_trade(self, trade_id: str, exit_price: float, return_pct: float) -> None:
+        """Close an open trade with exit price and gross return %."""
+        from datetime import datetime, timezone
+
         self._client.table("trades").update(
             {
                 "status": "closed",
                 "exit_price": exit_price,
-                "pnl": pnl,
-                "closed_at": "now()",
+                "return_pct": return_pct,
+                "closed_at": datetime.now(timezone.utc).isoformat(),
             }
         ).eq("id", trade_id).execute()
 
@@ -88,6 +90,16 @@ class SupabaseClient:
             .execute()
         )
         return response.data
+
+    def get_all_open_trades(self) -> list[dict[str, Any]]:
+        """Fetch all open trades across all agents (for SL/TP sync)."""
+        response = (
+            self._client.table("trades")
+            .select("*")
+            .eq("status", "open")
+            .execute()
+        )
+        return response.data or []
 
     # ------------------------------------------------------------------
     # Performance
