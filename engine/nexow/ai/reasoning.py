@@ -38,8 +38,8 @@ class ReasoningState(TypedDict):
     action: str       # buy, sell, hold, close
     instrument: str   # which instrument to trade
     confidence: float
-    stop_loss: float | None
-    take_profit: float | None
+    stop_loss_pct: float | None
+    take_profit_pct: float | None
     reasoning: str
     step: int
 
@@ -207,9 +207,6 @@ async def make_decision(state: ReasoningState) -> dict:
         f"## Technical Analysis\n{state.get('technical_analysis', 'N/A')}\n\n"
         f"## Sentiment Analysis\n{state.get('sentiment_analysis', 'N/A')}\n\n"
         f"## Correlation Analysis\n{state.get('correlation_analysis', 'N/A')}\n\n"
-        f"## Risk Parameters\n"
-        f"Risk per trade: {config.get('risk', {}).get('risk_per_trade_pct', 1)}%\n"
-        f"Max drawdown: {config.get('risk', {}).get('max_drawdown_pct', 10)}%\n\n"
         f"Based on ALL the above analysis, decide:\n"
         f"1. ACTION: buy, sell, or hold\n"
         f"2. INSTRUMENT: which one from {state['instruments']}\n"
@@ -262,32 +259,17 @@ async def make_decision(state: ReasoningState) -> dict:
             reasoning += f" [Filtered: confidence {confidence:.2f} < {personality} threshold {threshold}]"
             action = "hold"
 
-        # Calculate SL/TP
-        risk = config.get("risk", {})
-        pip = 0.0001
-        if "JPY" in instrument:
-            pip = 0.01
-        elif "XAU" in instrument:
-            pip = 0.1
-
-        sl_pips = risk.get("stop_loss_pips", 20)
-        rr_ratio = risk.get("risk_reward_ratio", 2.0)
-
-        stop_loss = None
-        take_profit = None
-        if action == "buy":
-            stop_loss = price - sl_pips * pip
-            take_profit = price + sl_pips * rr_ratio * pip
-        elif action == "sell":
-            stop_loss = price + sl_pips * pip
-            take_profit = price - sl_pips * rr_ratio * pip
+        # Get exit levels from config (percentage-based)
+        exit_config = config.get("exit", {})
+        sl_pct = exit_config.get("stop_loss_pct", 2.0)
+        tp_pct = exit_config.get("take_profit_pct", 4.0)
 
         return {
             "action": action,
             "instrument": instrument,
             "confidence": confidence,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
+            "stop_loss_pct": sl_pct if action in ("buy", "sell") else None,
+            "take_profit_pct": tp_pct if action in ("buy", "sell") else None,
             "reasoning": reasoning,
             "final_reasoning": text,
             "step": state.get("step", 0) + 1,
@@ -340,7 +322,7 @@ async def run_reasoning_chain(
     """
     Execute the reasoning graph and return the decision.
 
-    Returns dict with: action, instrument, confidence, stop_loss, take_profit, reasoning
+    Returns dict with: action, instrument, confidence, stop_loss_pct, take_profit_pct, reasoning
     """
     initial_state: ReasoningState = {
         "agent_config": agent_config,
@@ -355,8 +337,8 @@ async def run_reasoning_chain(
         "action": "hold",
         "instrument": (instruments or ["EUR_USD"])[0],
         "confidence": 0.0,
-        "stop_loss": None,
-        "take_profit": None,
+        "stop_loss_pct": None,
+        "take_profit_pct": None,
         "reasoning": "",
         "step": 0,
     }
@@ -367,7 +349,7 @@ async def run_reasoning_chain(
         "action": result["action"],
         "instrument": result.get("instrument", initial_state["instrument"]),
         "confidence": result["confidence"],
-        "stop_loss": result["stop_loss"],
-        "take_profit": result["take_profit"],
+        "stop_loss_pct": result["stop_loss_pct"],
+        "take_profit_pct": result["take_profit_pct"],
         "reasoning": result["reasoning"],
     }

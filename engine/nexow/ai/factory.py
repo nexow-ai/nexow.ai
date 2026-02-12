@@ -1,140 +1,120 @@
-"""PydanticAI-powered strategy factory — converts natural language to agent config."""
+"""PydanticAI-powered strategy factory — converts natural language to rule DSL + agent config."""
 
 from __future__ import annotations
 
 import structlog
 from pydantic_ai import Agent
 
-from nexow.ai.schemas import (
-    AgentGenerationResult,
-    AgentType,
-    DiscretionaryStrategyConfig,
-    SystematicStrategyConfig,
-)
+from nexow.ai.schemas import AgentGenerationResult, AgentType
 from nexow.config import settings
+from nexow.rules.schema import CONDITION_CATALOG
 
 logger = structlog.get_logger(__name__)
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = f"""\
 You are Nexow's Agent Factory. Convert a user's plain-English trading idea into a precise,
-executable trading agent configuration. You must return valid JSON that matches the expected schema.
+executable trading agent configuration with dynamic rules.
+
+## Design Philosophy
+
+Agents are **signal providers** — they emit entry signals (BUY/SELL) and exit signals (CLOSE).
+There is NO position sizing, no volume, no risk management in the agent config. Those concerns
+belong to a separate portfolio management layer.
+
+Agents are compared purely by the gross percentage return of their signals.
 
 ## Agent Types
 
-**Systematic** — rule-based agents using technical indicators. Use when the user wants:
-- Specific indicators (RSI, MACD, EMA, Bollinger Bands)
-- Clear buy/sell rules ("buy when RSI < 30")
-- Fast, deterministic execution
+**Systematic** — rule-based agents. The AI generates a JSON rule tree that the engine
+interprets dynamically. ANY trading logic expressible as conditions + operators is supported.
 
-**Discretionary** — LLM-powered agents that reason about context. Use when the user wants:
-- News-aware trading ("trade based on market sentiment")
-- Complex reasoning ("analyze the macro environment")
-- Context-dependent decisions
+**Discretionary** — LLM-powered agents that reason about news, sentiment, and context
+before each trade. Use when the user wants news-aware or reasoning-heavy strategies.
 
-## Portfolio Support
+## Rule DSL (for systematic agents)
 
-Agents can trade MULTIPLE instruments. Build a portfolio when the user mentions:
-- Multiple currencies/assets ("trade EUR/USD and Gold")
-- Diversification ("build a balanced forex portfolio")
-- Hedging ("hedge my EUR exposure with CHF")
+The config must contain a "rules" object with "buy_rules", "sell_rules", and optionally "close_rules".
+Each rule group has an "operator" and a list of "conditions".
 
-Allocations must sum to 100%. Assign higher allocation to the primary instrument.
+- **buy_rules** — conditions to open a LONG position
+- **sell_rules** — conditions to open a SHORT position
+- **close_rules** — conditions to close any open position (optional, rule-based exits)
 
-## Available Instruments
-EUR_USD, GBP_USD, USD_JPY, XAU_USD, USD_CAD, AUD_USD, NZD_USD, USD_CHF
+Operators: "and" (all must be true), "or" (any true), "not" (invert), "always" (unconditional)
 
-## Available Strategies (systematic only)
-- rsi_reversal: Buy oversold, sell overbought
-- macd_crossover: Buy/sell on MACD signal line crossover
-- ema_crossover: Buy/sell on fast/slow EMA crossover
-- bollinger_breakout: Buy/sell on Bollinger Band breakout
-- rsi_macd_confluence: Both RSI and MACD must agree
-- ema_bollinger_confluence: EMA trend + Bollinger confirmation
+### Available Condition Types:
+{CONDITION_CATALOG}
 
-## Timeframes
-M1, M5, M15, M30, H1, H4, D
+### Rule Examples:
 
-## Risk Management
-Always set sensible risk. Default to cautious if unspecified:
-- risk_per_trade_pct: 1.0 (cautious), 2.0 (balanced), 3.0+ (aggressive)
-- max_drawdown_pct: 10 (cautious), 20 (balanced), 30+ (aggressive)
-- stop_loss_mode: "fixed_pips" (default), "atr_based" (adaptive), "trailing" (trend-following)
-- take_profit_mode: "risk_reward" (default, use 2:1 ratio), "fixed_pips", "atr_based"
-- max_concurrent_trades: 3 (cautious), 5 (balanced), 10 (aggressive)
+"Buy when RSI < 30 and candle is green":
+{{"rules": {{"buy_rules": {{"operator": "and", "conditions": [
+  {{"type": "rsi_below", "params": {{"threshold": 30, "period": 14}}}},
+  {{"type": "candle_is_green"}}
+]}}, "sell_rules": {{"operator": "and", "conditions": [{{"type": "rsi_above", "params": {{"threshold": 70, "period": 14}}}}]}}}}}}
 
-## LLM Provider (discretionary only)
-- "openai" with model "gpt-4o-mini" (faster, cheaper) or "gpt-4o" (smarter)
-- "anthropic" with model "claude-sonnet-4-20250514" (excellent reasoning)
+"Buy on MACD bullish crossover when price is above EMA 50":
+{{"rules": {{"buy_rules": {{"operator": "and", "conditions": [
+  {{"type": "macd_cross_up"}},
+  {{"type": "price_above_ema", "params": {{"period": 50}}}}
+]}}, "sell_rules": {{"operator": "or", "conditions": [{{"type": "macd_cross_down"}}, {{"type": "price_below_ema", "params": {{"period": 50}}}}]}}}}}}
 
-## Output Rules
-1. Generate a creative, descriptive name.
-2. Write a clear 1-2 sentence description.
-3. Include a risk_summary line like "Cautious: 1% risk, 2:1 R:R, 10% max DD"
-4. Include a portfolio_summary line like "EUR/USD (60%) + XAU/USD (40%)"
-5. The config dict must contain all required fields for the chosen type.
+## Portfolio
+
+The config must include which instruments and timeframes to trade:
+{{"portfolio": {{"instruments": [{{"instrument": "EUR_USD", "timeframe": "M5"}}]}}}}
+
+Available instruments: EUR_USD, GBP_USD, USD_JPY, XAU_USD, USD_CAD, AUD_USD, NZD_USD, USD_CHF
+Available timeframes: M1, M5, M15, M30, H1, H4, D
+
+## Exit Levels (percentage-based)
+
+Every agent should define default exit levels as percentages from entry:
+{{"exit": {{"stop_loss_pct": 2.0, "take_profit_pct": 4.0}}}}
+
+- stop_loss_pct: close if the trade moves this % against entry (e.g. 2.0 = -2%)
+- take_profit_pct: close if the trade moves this % in favour (e.g. 4.0 = +4%)
+
+Choose levels that match the strategy style:
+- Scalping: SL 0.3-0.5%, TP 0.5-1%
+- Day trading: SL 1-2%, TP 2-4%
+- Swing trading: SL 2-5%, TP 5-10%
+- Position trading: SL 5-10%, TP 10-20%
+
+## For Discretionary Agents
+
+Include: llm_provider, llm_model, personality, focus_areas, use_web_search, use_news_feed, evaluation_schedule
+
+## Output
+
+Return valid JSON with: agent_type, name, description, config, portfolio_summary
+The config must contain: portfolio, rules (for systematic), and exit.
 """
 
 
 def _get_model(provider: str = "openai") -> str:
-    """Return the PydanticAI model string based on provider."""
     if provider == "anthropic" and settings.anthropic_api_key:
         return "anthropic:claude-sonnet-4-20250514"
     return "openai:gpt-4o-mini"
-
-
-# Default factory using OpenAI
-_factory_openai = Agent(
-    "openai:gpt-4o-mini",
-    output_type=AgentGenerationResult,
-    system_prompt=SYSTEM_PROMPT,
-)
 
 
 async def generate_strategy(
     user_prompt: str,
     preferred_provider: str = "openai",
 ) -> AgentGenerationResult:
-    """
-    Take a user's natural language prompt and generate a validated strategy config.
-
-    Args:
-        user_prompt: The user's trading idea in plain English.
-        preferred_provider: Which LLM to use for generation ("openai" or "anthropic").
-
-    Returns:
-        AgentGenerationResult with type, name, description, and validated config.
-    """
+    """Generate a validated strategy config from a natural language prompt."""
     logger.info("generating_strategy", prompt=user_prompt[:100], provider=preferred_provider)
 
     model = _get_model(preferred_provider)
-
-    # Create agent with the chosen model
-    factory = Agent(
-        model,
-        output_type=AgentGenerationResult,
-        system_prompt=SYSTEM_PROMPT,
-    )
+    factory = Agent(model, output_type=AgentGenerationResult, system_prompt=SYSTEM_PROMPT)
 
     result = await factory.run(user_prompt)
     generation = result.output
-
-    # Validate the config against the appropriate schema
-    try:
-        if generation.agent_type == AgentType.SYSTEMATIC:
-            validated = SystematicStrategyConfig(**generation.config)
-            generation.config = validated.model_dump(mode="json")
-        elif generation.agent_type == AgentType.DISCRETIONARY:
-            validated = DiscretionaryStrategyConfig(**generation.config)
-            generation.config = validated.model_dump(mode="json")
-    except Exception as e:
-        logger.warning("config_validation_fallback", error=str(e))
-        # Keep the raw config if validation fails — AI output was close enough
 
     logger.info(
         "strategy_generated",
         agent_type=generation.agent_type,
         name=generation.name,
-        portfolio=generation.portfolio_summary,
-        risk=generation.risk_summary,
+        has_rules="rules" in generation.config,
     )
     return generation
