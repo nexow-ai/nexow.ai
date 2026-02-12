@@ -11,7 +11,7 @@ export default function DashboardLayout({
       <Sidebar />
       <div className="flex flex-1 flex-col pl-64">
         <Header />
-        <main className="flex-1 p-6">{children}</main>
+        <main className="flex-1 p-8 mesh-gradient">{children}</main>
       </div>
     </div>
   );
