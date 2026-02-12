@@ -9,10 +9,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { createClient } from "@/lib/supabase/client";
 import { useAgent } from "@/hooks/use-agents";
 import { useTrades } from "@/hooks/use-trades";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatPercent } from "@/lib/utils";
 import { Loader2, Pause, Play, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { use, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 
 interface AgentDetailPageProps {
   params: Promise<{ id: string }>;
@@ -22,8 +22,29 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
   const { id } = use(params);
   const router = useRouter();
   const { agent, loading: agentLoading, refetch } = useAgent(id);
-  const { trades, loading: tradesLoading } = useTrades(id);
+  const { trades, loading: tradesLoading, refetch: refetchTrades } = useTrades(id);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+
+  const fetchLivePrice = useCallback(async () => {
+    if (!agent) return;
+    try {
+      const res = await fetch(`/api/price?instrument=${agent.instrument}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentPrice(data.mid);
+      }
+    } catch { /* ignore */ }
+  }, [agent]);
+
+  useEffect(() => {
+    fetchLivePrice();
+    const interval = setInterval(() => {
+      fetchLivePrice();
+      refetchTrades();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [fetchLivePrice, refetchTrades]);
 
   async function handleToggleStatus() {
     if (!agent) return;
@@ -68,13 +89,14 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
   }
 
   const closedTrades = trades.filter((t) => t.status === "closed");
-  const winningTrades = closedTrades.filter((t) => (t.pnl ?? 0) > 0);
-  const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  const winningTrades = closedTrades.filter((t) => (t.return_pct ?? 0) > 0);
+  const totalReturn = closedTrades.reduce((sum, t) => sum + (t.return_pct ?? 0), 0);
+  const avgReturn = closedTrades.length > 0 ? totalReturn / closedTrades.length : 0;
   const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
 
   return (
     <div className="space-y-8">
-      {/* Agent header with gradient accent */}
+      {/* Agent header */}
       <div className="relative overflow-hidden rounded-2xl border border-zinc-800/40 bg-zinc-900/30 p-6 backdrop-blur-sm">
         <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/5 via-transparent to-cyan-500/5" />
         <div className="relative flex items-center justify-between">
@@ -131,13 +153,12 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
       </div>
 
       {/* Performance stats */}
-      <div className="stagger-children grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="stagger-children grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {[
-          { label: "Total P&L", value: formatCurrency(totalPnl) },
-          { label: "ROI", value: formatPercent(0) },
+          { label: "Total Return", value: `${totalReturn >= 0 ? "+" : ""}${totalReturn.toFixed(2)}%` },
+          { label: "Avg Return", value: `${avgReturn >= 0 ? "+" : ""}${avgReturn.toFixed(2)}%` },
           { label: "Win Rate", value: `${winRate.toFixed(1)}%` },
           { label: "Trades", value: String(trades.length) },
-          { label: "Max DD", value: `${agent.max_drawdown_pct}%` },
           { label: "Open", value: String(trades.filter((t) => t.status === "open").length) },
         ].map((stat) => (
           <div key={stat.label} className="rounded-2xl border border-zinc-800/40 bg-zinc-900/30 p-4 backdrop-blur-sm">
@@ -161,7 +182,7 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
 
       {/* Trades table */}
       <Card>
-        <CardTitle>Trade History</CardTitle>
+        <CardTitle>Signal History</CardTitle>
         <CardContent className="mt-4">
           {tradesLoading ? (
             <div className="flex items-center justify-center py-8">
@@ -169,7 +190,7 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
             </div>
           ) : trades.length === 0 ? (
             <p className="py-8 text-center text-sm text-zinc-500">
-              No trades yet. Agent will start trading when market conditions match.
+              No signals yet. Agent will start generating signals when market conditions match.
             </p>
           ) : (
             <Table>
@@ -179,8 +200,8 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
                   <TableHead>Direction</TableHead>
                   <TableHead>Entry</TableHead>
                   <TableHead>Exit</TableHead>
-                  <TableHead>Quantity</TableHead>
-                  <TableHead>P&L</TableHead>
+                  <TableHead>Return</TableHead>
+                  <TableHead>SL / TP</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
@@ -199,15 +220,36 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
                     <TableCell>
                       {trade.exit_price ? Number(trade.exit_price).toFixed(5) : "—"}
                     </TableCell>
-                    <TableCell>{Number(trade.quantity).toFixed(0)}</TableCell>
                     <TableCell>
-                      {trade.pnl != null ? (
-                        <span className={trade.pnl >= 0 ? "text-emerald-400" : "text-red-400"}>
-                          {formatCurrency(trade.pnl)}
+                      {trade.status === "closed" && trade.return_pct != null ? (
+                        <span className={trade.return_pct >= 0 ? "text-emerald-400" : "text-red-400"}>
+                          {trade.return_pct >= 0 ? "+" : ""}{Number(trade.return_pct).toFixed(2)}%
                         </span>
+                      ) : trade.status === "open" && currentPrice ? (
+                        (() => {
+                          const entry = Number(trade.entry_price);
+                          const unreturned = trade.direction === "buy"
+                            ? ((currentPrice - entry) / entry) * 100
+                            : ((entry - currentPrice) / entry) * 100;
+                          return (
+                            <span className={unreturned >= 0 ? "text-emerald-400" : "text-red-400"}>
+                              {unreturned >= 0 ? "+" : ""}{unreturned.toFixed(2)}%
+                              <span className="ml-1 text-[10px] text-zinc-600">live</span>
+                            </span>
+                          );
+                        })()
                       ) : (
                         "—"
                       )}
+                    </TableCell>
+                    <TableCell className="text-xs text-zinc-500">
+                      {trade.stop_loss_pct != null || trade.take_profit_pct != null ? (
+                        <>
+                          {trade.stop_loss_pct != null && <span className="text-red-400/70">-{Number(trade.stop_loss_pct).toFixed(1)}%</span>}
+                          {trade.stop_loss_pct != null && trade.take_profit_pct != null && " / "}
+                          {trade.take_profit_pct != null && <span className="text-emerald-400/70">+{Number(trade.take_profit_pct).toFixed(1)}%</span>}
+                        </>
+                      ) : "—"}
                     </TableCell>
                     <TableCell>
                       <Badge variant={trade.status === "open" ? "info" : "default"}>

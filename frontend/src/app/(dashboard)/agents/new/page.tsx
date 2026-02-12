@@ -3,9 +3,9 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { createClient } from "@/lib/supabase/client";
 import { AGENT_TEMPLATES, type AgentTemplate } from "@/lib/agent-templates";
+import { RuleDisplay } from "@/components/agents/rule-display";
 import {
   ArrowLeft,
   ArrowRight,
@@ -14,33 +14,26 @@ import {
   Check,
   Loader2,
   Rocket,
-  Shield,
   Sparkles,
   Zap,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-type WizardStep = "prompt" | "preview" | "risk" | "deploy";
+type WizardStep = "prompt" | "preview" | "deploy";
 
 const EXAMPLE_PROMPTS = [
   "Cautious Gold trader using RSI on H1 timeframe",
-  "Aggressive EUR/USD + GBP/USD portfolio with MACD and EMA confluence",
+  "Aggressive EUR/USD scalper with MACD on M5",
   "Smart news-aware agent that trades XAU/USD based on market sentiment",
-  "Balanced forex portfolio: EUR/USD 40%, GBP/USD 30%, USD/JPY 30% with Bollinger Bands",
-  "Conservative discretionary agent analyzing EUR/USD with web search and economic calendar",
-];
-
-const INSTRUMENTS = [
-  "EUR_USD", "GBP_USD", "USD_JPY", "XAU_USD",
-  "USD_CAD", "AUD_USD", "NZD_USD", "USD_CHF",
+  "EUR/USD and GBP/USD portfolio with Bollinger Bands on M15",
+  "Conservative discretionary agent analyzing EUR/USD with web search",
 ];
 
 interface GeneratedAgent {
   agent_type: string;
   name: string;
   description: string;
-  risk_summary: string;
   portfolio_summary: string;
   config: Record<string, unknown>;
 }
@@ -48,7 +41,6 @@ interface GeneratedAgent {
 export default function NewAgentPage() {
   const router = useRouter();
 
-  // Wizard state
   const [step, setStep] = useState<WizardStep>("prompt");
   const [prompt, setPrompt] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -62,31 +54,11 @@ export default function NewAgentPage() {
       agent_type: template.agent_type,
       name: template.name,
       description: template.description,
-      risk_summary: "",
       portfolio_summary: "",
       config: template.config,
     });
-    const risk = (template.config.risk ?? {}) as Record<string, number>;
-    setRiskOverrides({
-      risk_per_trade_pct: risk.risk_per_trade_pct ?? 1.0,
-      max_drawdown_pct: risk.max_drawdown_pct ?? 10.0,
-      max_daily_loss_pct: risk.max_daily_loss_pct ?? 3.0,
-      stop_loss_pips: risk.stop_loss_pips ?? 20,
-      risk_reward_ratio: risk.risk_reward_ratio ?? 2.0,
-      max_concurrent_trades: risk.max_concurrent_trades ?? 3,
-    });
     setStep("preview");
   }
-
-  // Risk overrides
-  const [riskOverrides, setRiskOverrides] = useState({
-    risk_per_trade_pct: 1.0,
-    max_drawdown_pct: 10.0,
-    max_daily_loss_pct: 3.0,
-    stop_loss_pips: 20,
-    risk_reward_ratio: 2.0,
-    max_concurrent_trades: 3,
-  });
 
   async function handleGenerate() {
     if (!prompt.trim()) return;
@@ -107,18 +79,6 @@ export default function NewAgentPage() {
 
       const data: GeneratedAgent = await res.json();
       setGenerated(data);
-
-      // Pre-fill risk overrides from generated config
-      const risk = (data.config?.risk ?? {}) as Record<string, number>;
-      setRiskOverrides({
-        risk_per_trade_pct: risk.risk_per_trade_pct ?? 1.0,
-        max_drawdown_pct: risk.max_drawdown_pct ?? 10.0,
-        max_daily_loss_pct: risk.max_daily_loss_pct ?? 3.0,
-        stop_loss_pips: risk.stop_loss_pips ?? 20,
-        risk_reward_ratio: risk.risk_reward_ratio ?? 2.0,
-        max_concurrent_trades: risk.max_concurrent_trades ?? 3,
-      });
-
       setStep("preview");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -137,13 +97,7 @@ export default function NewAgentPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Merge risk overrides into config
       const config = { ...generated.config };
-      (config as Record<string, unknown>).risk = {
-        ...((config as Record<string, unknown>).risk as Record<string, unknown> ?? {}),
-        ...riskOverrides,
-      };
-
       const portfolio = (config as Record<string, unknown>).portfolio as Record<string, unknown> | undefined;
       const instruments = (portfolio?.instruments ?? []) as Array<Record<string, unknown>>;
       const primaryInstrument = instruments[0]?.instrument as string ?? "EUR_USD";
@@ -160,9 +114,6 @@ export default function NewAgentPage() {
           instrument: primaryInstrument,
           instruments: instruments,
           timeframe: primaryTimeframe,
-          risk_config: riskOverrides,
-          max_drawdown_pct: riskOverrides.max_drawdown_pct,
-          risk_per_trade_pct: riskOverrides.risk_per_trade_pct,
           llm_provider: (config as Record<string, unknown>).llm_provider ?? "openai",
           llm_model: (config as Record<string, unknown>).llm_model ?? "gpt-4o-mini",
           status: "active",
@@ -178,28 +129,30 @@ export default function NewAgentPage() {
     }
   }
 
+  const exitConfig = generated?.config?.exit as Record<string, number> | undefined;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       {/* Step indicator */}
       <div className="flex items-center gap-2">
-        {(["prompt", "preview", "risk", "deploy"] as WizardStep[]).map((s, i) => (
+        {(["prompt", "preview", "deploy"] as WizardStep[]).map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div
               className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors ${
                 step === s
                   ? "bg-emerald-600 text-white"
-                  : (["prompt", "preview", "risk", "deploy"].indexOf(step) > i)
+                  : (["prompt", "preview", "deploy"].indexOf(step) > i)
                     ? "bg-emerald-900/50 text-emerald-400"
                     : "bg-zinc-800 text-zinc-500"
               }`}
             >
-              {["prompt", "preview", "risk", "deploy"].indexOf(step) > i ? (
+              {["prompt", "preview", "deploy"].indexOf(step) > i ? (
                 <Check className="h-4 w-4" />
               ) : (
                 i + 1
               )}
             </div>
-            {i < 3 && <div className="h-px w-8 bg-zinc-800 sm:w-16" />}
+            {i < 2 && <div className="h-px w-8 bg-zinc-800 sm:w-16" />}
           </div>
         ))}
       </div>
@@ -213,14 +166,14 @@ export default function NewAgentPage() {
             Describe Your Strategy
           </CardTitle>
           <CardDescription className="mt-1">
-            Tell us what you want in plain English. The AI will design a complete trading agent.
+            Tell us what you want in plain English. The AI will design entry and exit signals.
           </CardDescription>
 
           <div className="mt-6 space-y-4">
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g. Build a cautious Gold and EUR/USD portfolio that uses RSI reversals with 2:1 risk-reward ratio..."
+              placeholder="e.g. Build a Gold and EUR/USD agent that uses RSI reversals with 2:1 reward ratio on H1..."
               rows={5}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               required
@@ -293,7 +246,7 @@ export default function NewAgentPage() {
         </>
       )}
 
-      {/* Step 2: AI Preview */}
+      {/* Step 2: Preview */}
       {step === "preview" && generated && (
         <div className="space-y-4">
           <Card>
@@ -316,129 +269,43 @@ export default function NewAgentPage() {
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                  <p className="text-xs text-zinc-500">Portfolio</p>
+                  <p className="text-xs text-zinc-500">Instruments</p>
                   <p className="mt-1 text-sm text-zinc-200">{generated.portfolio_summary || "Single instrument"}</p>
                 </div>
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                  <p className="text-xs text-zinc-500">Risk Profile</p>
-                  <p className="mt-1 text-sm text-zinc-200">{generated.risk_summary || "Default risk settings"}</p>
+                  <p className="text-xs text-zinc-500">Exit Levels</p>
+                  <p className="mt-1 text-sm text-zinc-200">
+                    SL: {exitConfig?.stop_loss_pct ?? "—"}% · TP: {exitConfig?.take_profit_pct ?? "—"}%
+                  </p>
                 </div>
               </div>
 
-              {/* Strategy details */}
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                <p className="mb-2 text-xs text-zinc-500">Strategy Config</p>
-                <pre className="max-h-48 overflow-auto text-xs text-zinc-400">
+              {/* Trading Rules */}
+              {(generated.config as Record<string, unknown>)?.rules ? (
+                <div className="rounded-2xl border border-zinc-800/40 bg-zinc-900/30 p-4">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">Trading Rules</p>
+                  <RuleDisplay rules={(generated.config as Record<string, unknown>).rules as Record<string, unknown>} />
+                </div>
+              ) : null}
+
+              {/* Raw config */}
+              <details className="rounded-2xl border border-zinc-800/40 bg-zinc-900/30">
+                <summary className="cursor-pointer px-4 py-3 text-xs font-medium text-zinc-600 hover:text-zinc-400">
+                  View raw config JSON
+                </summary>
+                <pre className="max-h-48 overflow-auto px-4 pb-3 text-xs text-zinc-500">
                   {JSON.stringify(generated.config, null, 2)}
                 </pre>
-              </div>
+              </details>
             </div>
           </Card>
+
+          {error && <p className="text-sm text-red-400">{error}</p>}
 
           <div className="flex gap-3">
             <Button variant="outline" onClick={() => setStep("prompt")}>
               <ArrowLeft className="h-4 w-4" />
               Edit Prompt
-            </Button>
-            <Button className="flex-1" onClick={() => setStep("risk")}>
-              Configure Risk
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 3: Risk Configuration */}
-      {step === "risk" && (
-        <div className="space-y-4">
-          <Card>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5 text-amber-400" />
-              Risk Management
-            </CardTitle>
-            <CardDescription className="mt-1">
-              Fine-tune your risk parameters. These override the AI-generated defaults.
-            </CardDescription>
-
-            <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Input
-                label="Risk per Trade (%)"
-                type="number"
-                step="0.1"
-                min="0.1"
-                max="10"
-                value={riskOverrides.risk_per_trade_pct}
-                onChange={(e) => setRiskOverrides((r) => ({ ...r, risk_per_trade_pct: parseFloat(e.target.value) || 1 }))}
-              />
-              <Input
-                label="Max Drawdown (%)"
-                type="number"
-                step="1"
-                min="1"
-                max="50"
-                value={riskOverrides.max_drawdown_pct}
-                onChange={(e) => setRiskOverrides((r) => ({ ...r, max_drawdown_pct: parseFloat(e.target.value) || 10 }))}
-              />
-              <Input
-                label="Max Daily Loss (%)"
-                type="number"
-                step="0.5"
-                min="0.5"
-                max="20"
-                value={riskOverrides.max_daily_loss_pct}
-                onChange={(e) => setRiskOverrides((r) => ({ ...r, max_daily_loss_pct: parseFloat(e.target.value) || 3 }))}
-              />
-              <Input
-                label="Stop Loss (pips)"
-                type="number"
-                step="1"
-                min="1"
-                max="500"
-                value={riskOverrides.stop_loss_pips}
-                onChange={(e) => setRiskOverrides((r) => ({ ...r, stop_loss_pips: parseInt(e.target.value) || 20 }))}
-              />
-              <Input
-                label="Risk:Reward Ratio"
-                type="number"
-                step="0.5"
-                min="0.5"
-                max="10"
-                value={riskOverrides.risk_reward_ratio}
-                onChange={(e) => setRiskOverrides((r) => ({ ...r, risk_reward_ratio: parseFloat(e.target.value) || 2 }))}
-              />
-              <Input
-                label="Max Concurrent Trades"
-                type="number"
-                step="1"
-                min="1"
-                max="20"
-                value={riskOverrides.max_concurrent_trades}
-                onChange={(e) => setRiskOverrides((r) => ({ ...r, max_concurrent_trades: parseInt(e.target.value) || 3 }))}
-              />
-            </div>
-
-            {/* Risk level indicator */}
-            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-              <p className="text-xs text-zinc-500">Risk Level</p>
-              <div className="mt-2 flex items-center gap-3">
-                {riskOverrides.risk_per_trade_pct <= 1 && riskOverrides.max_drawdown_pct <= 10 ? (
-                  <Badge variant="success">Conservative</Badge>
-                ) : riskOverrides.risk_per_trade_pct <= 2 && riskOverrides.max_drawdown_pct <= 20 ? (
-                  <Badge variant="info">Balanced</Badge>
-                ) : (
-                  <Badge variant="danger">Aggressive</Badge>
-                )}
-                <span className="text-xs text-zinc-400">
-                  {riskOverrides.risk_per_trade_pct}% risk, {riskOverrides.risk_reward_ratio}:1 R:R, {riskOverrides.max_drawdown_pct}% max DD
-                </span>
-              </div>
-            </div>
-          </Card>
-
-          <div className="flex gap-3">
-            <Button variant="outline" onClick={() => setStep("preview")}>
-              <ArrowLeft className="h-4 w-4" />
-              Back
             </Button>
             <Button className="flex-1" onClick={() => setStep("deploy")}>
               Review & Deploy
@@ -448,7 +315,7 @@ export default function NewAgentPage() {
         </div>
       )}
 
-      {/* Step 4: Review & Deploy */}
+      {/* Step 3: Deploy */}
       {step === "deploy" && generated && (
         <div className="space-y-4">
           <Card>
@@ -457,7 +324,7 @@ export default function NewAgentPage() {
               Ready to Deploy
             </CardTitle>
             <CardDescription className="mt-1">
-              Review your agent configuration and deploy it to start trading.
+              Review your agent and deploy it to start generating trading signals.
             </CardDescription>
 
             <div className="mt-4 space-y-3">
@@ -471,33 +338,30 @@ export default function NewAgentPage() {
                   <p className="mt-1 text-sm text-zinc-200">{generated.agent_type}</p>
                 </div>
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                  <p className="text-xs text-zinc-500">Portfolio</p>
+                  <p className="text-xs text-zinc-500">Instruments</p>
                   <p className="mt-1 text-sm text-zinc-200">{generated.portfolio_summary || "Single instrument"}</p>
                 </div>
                 <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                  <p className="text-xs text-zinc-500">Risk</p>
+                  <p className="text-xs text-zinc-500">Exit Levels</p>
                   <p className="mt-1 text-sm text-zinc-200">
-                    {riskOverrides.risk_per_trade_pct}% risk, {riskOverrides.risk_reward_ratio}:1 R:R
+                    SL: {exitConfig?.stop_loss_pct ?? "—"}% · TP: {exitConfig?.take_profit_pct ?? "—"}%
                   </p>
                 </div>
-                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                  <p className="text-xs text-zinc-500">Max Drawdown</p>
-                  <p className="mt-1 text-sm text-zinc-200">{riskOverrides.max_drawdown_pct}%</p>
-                </div>
-                <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-                  <p className="text-xs text-zinc-500">Max Trades</p>
-                  <p className="mt-1 text-sm text-zinc-200">{riskOverrides.max_concurrent_trades}</p>
-                </div>
+              </div>
+
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                <p className="text-xs text-amber-400">
+                  Agents are signal providers — they generate entry/exit signals and are tracked by gross return %.
+                  No real money is involved.
+                </p>
               </div>
             </div>
           </Card>
 
-          {error && (
-            <p className="text-sm text-red-400">{error}</p>
-          )}
+          {error && <p className="text-sm text-red-400">{error}</p>}
 
           <div className="flex gap-3">
-            <Button variant="outline" onClick={() => setStep("risk")}>
+            <Button variant="outline" onClick={() => setStep("preview")}>
               <ArrowLeft className="h-4 w-4" />
               Back
             </Button>

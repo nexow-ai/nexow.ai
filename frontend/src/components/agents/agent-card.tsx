@@ -1,8 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { AgentStatusBadge } from "./agent-status-badge";
-import { Bot, Brain, TrendingUp } from "lucide-react";
+import { Bot, Brain } from "lucide-react";
 import Link from "next/link";
-import { formatCurrency, formatPercent } from "@/lib/utils";
 import type { Database } from "@/lib/types/database";
 
 type Agent = Database["public"]["Tables"]["agents"]["Row"];
@@ -10,9 +9,9 @@ type Agent = Database["public"]["Tables"]["agents"]["Row"];
 interface AgentCardProps {
   agent: Agent;
   performance?: {
-    total_pnl: number;
+    total_return_pct: number;
     win_rate: number;
-    roi_pct: number;
+    avg_return_pct: number;
     total_trades: number;
   };
 }
@@ -21,7 +20,6 @@ export function AgentCard({ agent, performance }: AgentCardProps) {
   return (
     <Link href={`/agents/${agent.id}`}>
       <div className="group relative overflow-hidden rounded-2xl border border-zinc-800/40 bg-zinc-900/30 p-5 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700/50 hover:bg-zinc-900/50 hover:shadow-lg hover:shadow-black/20">
-        {/* Subtle gradient on hover */}
         <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
 
         <div className="relative">
@@ -53,8 +51,8 @@ export function AgentCard({ agent, performance }: AgentCardProps) {
 
             {performance && (
               <div className="flex items-center gap-3 text-xs">
-                <span className={performance.total_pnl >= 0 ? "text-emerald-400" : "text-red-400"}>
-                  {formatCurrency(performance.total_pnl)}
+                <span className={performance.total_return_pct >= 0 ? "text-emerald-400" : "text-red-400"}>
+                  {performance.total_return_pct >= 0 ? "+" : ""}{performance.total_return_pct.toFixed(2)}%
                 </span>
                 <span className="text-zinc-600">|</span>
                 <span className="text-zinc-500">{performance.win_rate.toFixed(0)}% WR</span>
