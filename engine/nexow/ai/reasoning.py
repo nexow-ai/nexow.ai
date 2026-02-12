@@ -1,18 +1,23 @@
-"""LangGraph reasoning chains for discretionary agents."""
+"""LangGraph reasoning chains for discretionary agents — with real LLM calls and external data."""
 
 from __future__ import annotations
 
 from typing import Any, TypedDict
 
 import structlog
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
+
+from nexow.ai.tools import gather_external_context
+from nexow.config import settings
 
 logger = structlog.get_logger(__name__)
 
 
-# ------------------------------------------------------------------
-# State definition
-# ------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────
+# State
+# ──────────────────────────────────────────────────────────
 
 class ReasoningState(TypedDict):
     """State that flows through the reasoning graph."""
@@ -20,8 +25,18 @@ class ReasoningState(TypedDict):
     agent_config: dict[str, Any]
     market_context: dict[str, Any]
     personality: str
-    analysis: str
-    action: str
+    instruments: list[str]
+
+    # Populated by nodes
+    external_data: dict[str, Any]
+    technical_analysis: str
+    sentiment_analysis: str
+    correlation_analysis: str
+    final_reasoning: str
+
+    # Decision output
+    action: str       # buy, sell, hold, close
+    instrument: str   # which instrument to trade
     confidence: float
     stop_loss: float | None
     take_profit: float | None
@@ -29,12 +44,56 @@ class ReasoningState(TypedDict):
     step: int
 
 
-# ------------------------------------------------------------------
-# Graph nodes
-# ------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────
+# LLM helper
+# ──────────────────────────────────────────────────────────
 
-async def analyze_market(state: ReasoningState) -> ReasoningState:
-    """Analyze market data and produce a textual analysis."""
+def _get_llm(provider: str = "openai", model: str = "gpt-4o-mini") -> ChatOpenAI:
+    """Get a LangChain LLM instance."""
+    if provider == "anthropic" and settings.anthropic_api_key:
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model=model or "claude-sonnet-4-20250514",
+            api_key=settings.anthropic_api_key,
+            max_tokens=1024,
+        )
+    return ChatOpenAI(
+        model=model or "gpt-4o-mini",
+        api_key=settings.openai_api_key,
+        max_tokens=1024,
+        temperature=0.3,
+    )
+
+
+# ──────────────────────────────────────────────────────────
+# Graph nodes
+# ──────────────────────────────────────────────────────────
+
+async def fetch_external_data(state: ReasoningState) -> dict:
+    """Fetch news, web search, and economic calendar data."""
+    config = state["agent_config"]
+    instruments = state["instruments"]
+
+    use_search = config.get("use_web_search", True)
+    use_news = config.get("use_news_feed", True)
+
+    external = await gather_external_context(
+        instruments=instruments,
+        use_web_search=use_search,
+        use_news_feed=use_news,
+    )
+
+    logger.info(
+        "external_data_fetched",
+        news_count=len(external.get("news", [])),
+        search_count=len(external.get("web_search", [])),
+    )
+
+    return {"external_data": external, "step": state.get("step", 0) + 1}
+
+
+async def analyze_technicals(state: ReasoningState) -> dict:
+    """Analyze technical indicators from market context."""
     ctx = state["market_context"]
     personality = state["personality"]
 
@@ -42,106 +101,229 @@ async def analyze_market(state: ReasoningState) -> ReasoningState:
     change = ctx.get("price_change_pct", 0)
     high = ctx.get("recent_high", 0)
     low = ctx.get("recent_low", 0)
+    candles = ctx.get("latest_candles", [])
 
-    analysis_parts = [
-        f"Current price: {price:.5f}",
-        f"Recent change: {change:.2f}%",
-        f"Range: {low:.5f} - {high:.5f}",
-    ]
+    analysis = (
+        f"Instrument: {ctx.get('instrument', 'N/A')}\n"
+        f"Current price: {price:.5f}\n"
+        f"Recent change: {change:.2f}%\n"
+        f"Range: {low:.5f} - {high:.5f}\n"
+        f"Position in range: {((price - low) / (high - low) * 100) if high != low else 50:.1f}%\n"
+        f"Last {len(candles)} candles: {[c.get('c', 0) for c in candles]}\n"
+        f"Personality: {personality}"
+    )
 
-    if personality == "aggressive":
-        analysis_parts.append("Personality: Looking for strong momentum entries.")
-    elif personality == "cautious":
-        analysis_parts.append("Personality: Prioritizing safety and confirmed signals.")
-    else:
-        analysis_parts.append("Personality: Balanced approach.")
-
-    state["analysis"] = " | ".join(analysis_parts)
-    state["step"] = state.get("step", 0) + 1
-    return state
+    return {"technical_analysis": analysis, "step": state.get("step", 0) + 1}
 
 
-async def make_decision(state: ReasoningState) -> ReasoningState:
-    """Based on analysis, decide on a trading action."""
-    ctx = state["market_context"]
+async def analyze_sentiment(state: ReasoningState) -> dict:
+    """Use LLM to analyze news sentiment."""
+    external = state.get("external_data", {})
+    news = external.get("news", [])
+    web = external.get("web_search", [])
+
+    if not news and not web:
+        return {"sentiment_analysis": "No external data available.", "step": state.get("step", 0) + 1}
+
+    config = state["agent_config"]
+    llm = _get_llm(
+        provider=config.get("llm_provider", "openai"),
+        model=config.get("llm_model", "gpt-4o-mini"),
+    )
+
+    news_text = "\n".join(
+        f"- [{n.get('source', '?')}] {n.get('title', '')}: {n.get('description', '')}"
+        for n in news[:5]
+    )
+    web_text = "\n".join(
+        f"- {w.get('title', '')}: {w.get('content', '')[:200]}"
+        for w in web[:5]
+    )
+
+    prompt = (
+        f"Analyze the following market news and web data for forex trading sentiment.\n\n"
+        f"NEWS:\n{news_text}\n\n"
+        f"WEB ANALYSIS:\n{web_text}\n\n"
+        f"Instruments of interest: {', '.join(state['instruments'])}\n\n"
+        f"Provide a concise sentiment analysis (bullish/bearish/neutral) for each instrument "
+        f"and note any key events that could impact prices. Keep it under 200 words."
+    )
+
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content="You are a financial sentiment analyst."),
+            HumanMessage(content=prompt),
+        ])
+        sentiment = response.content
+    except Exception as e:
+        logger.error("sentiment_analysis_error", error=str(e))
+        sentiment = f"Sentiment analysis unavailable: {e}"
+
+    return {"sentiment_analysis": str(sentiment), "step": state.get("step", 0) + 1}
+
+
+async def analyze_correlations(state: ReasoningState) -> dict:
+    """Analyze correlations between portfolio instruments."""
+    instruments = state["instruments"]
+
+    if len(instruments) <= 1:
+        return {"correlation_analysis": "Single instrument, no correlation analysis needed.", "step": state.get("step", 0) + 1}
+
+    # Known correlation tendencies (simplified; in production, compute from price data)
+    known_correlations = {
+        ("EUR_USD", "GBP_USD"): 0.85,
+        ("EUR_USD", "USD_CHF"): -0.90,
+        ("AUD_USD", "NZD_USD"): 0.88,
+        ("XAU_USD", "USD_JPY"): -0.40,
+        ("EUR_USD", "USD_JPY"): -0.30,
+    }
+
+    lines = [f"Portfolio: {', '.join(instruments)}"]
+    for i, a in enumerate(instruments):
+        for b in instruments[i + 1:]:
+            pair = (a, b) if (a, b) in known_correlations else (b, a)
+            corr = known_correlations.get(pair, 0.0)
+            direction = "positive" if corr > 0 else "negative"
+            strength = "strong" if abs(corr) > 0.7 else "moderate" if abs(corr) > 0.4 else "weak"
+            lines.append(f"  {a} vs {b}: {corr:.2f} ({strength} {direction})")
+
+    return {"correlation_analysis": "\n".join(lines), "step": state.get("step", 0) + 1}
+
+
+async def make_decision(state: ReasoningState) -> dict:
+    """Use LLM to synthesize all analysis and make a trading decision."""
+    config = state["agent_config"]
+    llm = _get_llm(
+        provider=config.get("llm_provider", "openai"),
+        model=config.get("llm_model", "gpt-4o-mini"),
+    )
+
     personality = state["personality"]
-    change = ctx.get("price_change_pct", 0)
-
-    # Simple heuristic reasoning (in production, this calls an LLM)
-    confidence_threshold = {"aggressive": 0.3, "cautious": 0.7, "balanced": 0.5}.get(personality, 0.5)
-
-    if abs(change) < 0.05:
-        state["action"] = "hold"
-        state["confidence"] = 0.2
-        state["reasoning"] = "Market is flat, no clear direction."
-    elif change > 0.1:
-        state["action"] = "buy"
-        state["confidence"] = min(abs(change) / 1.0, 1.0)
-        state["reasoning"] = f"Upward momentum detected ({change:.2f}%)."
-    elif change < -0.1:
-        state["action"] = "sell"
-        state["confidence"] = min(abs(change) / 1.0, 1.0)
-        state["reasoning"] = f"Downward momentum detected ({change:.2f}%)."
-    else:
-        state["action"] = "hold"
-        state["confidence"] = 0.3
-        state["reasoning"] = "Weak signal, waiting for confirmation."
-
-    # Filter by confidence threshold
-    if state["confidence"] < confidence_threshold and state["action"] != "hold":
-        state["action"] = "hold"
-        state["reasoning"] += f" Confidence {state['confidence']:.2f} below threshold {confidence_threshold}."
-
-    state["step"] = state.get("step", 0) + 1
-    return state
-
-
-async def set_risk_levels(state: ReasoningState) -> ReasoningState:
-    """Calculate stop-loss and take-profit based on action and config."""
     ctx = state["market_context"]
     price = ctx.get("current_price", 0)
-    risk_config = state["agent_config"].get("risk", {})
 
-    sl_pips = risk_config.get("stop_loss_pips")
-    tp_pips = risk_config.get("take_profit_pips")
+    prompt = (
+        f"You are a {personality} forex trader making a decision.\n\n"
+        f"## Technical Analysis\n{state.get('technical_analysis', 'N/A')}\n\n"
+        f"## Sentiment Analysis\n{state.get('sentiment_analysis', 'N/A')}\n\n"
+        f"## Correlation Analysis\n{state.get('correlation_analysis', 'N/A')}\n\n"
+        f"## Risk Parameters\n"
+        f"Risk per trade: {config.get('risk', {}).get('risk_per_trade_pct', 1)}%\n"
+        f"Max drawdown: {config.get('risk', {}).get('max_drawdown_pct', 10)}%\n\n"
+        f"Based on ALL the above analysis, decide:\n"
+        f"1. ACTION: buy, sell, or hold\n"
+        f"2. INSTRUMENT: which one from {state['instruments']}\n"
+        f"3. CONFIDENCE: 0.0 to 1.0\n"
+        f"4. REASONING: 1-2 sentences explaining why\n\n"
+        f"Respond in exactly this format:\n"
+        f"ACTION: <buy|sell|hold>\n"
+        f"INSTRUMENT: <instrument>\n"
+        f"CONFIDENCE: <0.0-1.0>\n"
+        f"REASONING: <explanation>"
+    )
 
-    # Default pip value (for forex majors, 1 pip ≈ 0.0001)
-    pip = 0.0001
-    if "JPY" in ctx.get("instrument", ""):
-        pip = 0.01
-    if "XAU" in ctx.get("instrument", ""):
-        pip = 0.1
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content="You are an expert forex trading AI. Be decisive but risk-aware."),
+            HumanMessage(content=prompt),
+        ])
+        text = str(response.content)
 
-    if state["action"] == "buy":
-        state["stop_loss"] = price - (sl_pips or 20) * pip
-        state["take_profit"] = price + (tp_pips or 40) * pip
-    elif state["action"] == "sell":
-        state["stop_loss"] = price + (sl_pips or 20) * pip
-        state["take_profit"] = price - (tp_pips or 40) * pip
-    else:
-        state["stop_loss"] = None
-        state["take_profit"] = None
+        # Parse structured response
+        action = "hold"
+        instrument = state["instruments"][0] if state["instruments"] else "EUR_USD"
+        confidence = 0.5
+        reasoning = text
 
-    state["step"] = state.get("step", 0) + 1
-    return state
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.upper().startswith("ACTION:"):
+                action = line.split(":", 1)[1].strip().lower()
+                if action not in ("buy", "sell", "hold", "close"):
+                    action = "hold"
+            elif line.upper().startswith("INSTRUMENT:"):
+                parsed_inst = line.split(":", 1)[1].strip().upper().replace("/", "_")
+                if parsed_inst in state["instruments"]:
+                    instrument = parsed_inst
+            elif line.upper().startswith("CONFIDENCE:"):
+                try:
+                    confidence = float(line.split(":", 1)[1].strip())
+                    confidence = max(0.0, min(1.0, confidence))
+                except ValueError:
+                    pass
+            elif line.upper().startswith("REASONING:"):
+                reasoning = line.split(":", 1)[1].strip()
+
+        # Apply personality filter
+        thresholds = {"aggressive": 0.3, "balanced": 0.5, "cautious": 0.6, "conservative": 0.7}
+        threshold = thresholds.get(personality, 0.5)
+
+        if confidence < threshold and action != "hold":
+            reasoning += f" [Filtered: confidence {confidence:.2f} < {personality} threshold {threshold}]"
+            action = "hold"
+
+        # Calculate SL/TP
+        risk = config.get("risk", {})
+        pip = 0.0001
+        if "JPY" in instrument:
+            pip = 0.01
+        elif "XAU" in instrument:
+            pip = 0.1
+
+        sl_pips = risk.get("stop_loss_pips", 20)
+        rr_ratio = risk.get("risk_reward_ratio", 2.0)
+
+        stop_loss = None
+        take_profit = None
+        if action == "buy":
+            stop_loss = price - sl_pips * pip
+            take_profit = price + sl_pips * rr_ratio * pip
+        elif action == "sell":
+            stop_loss = price + sl_pips * pip
+            take_profit = price - sl_pips * rr_ratio * pip
+
+        return {
+            "action": action,
+            "instrument": instrument,
+            "confidence": confidence,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "reasoning": reasoning,
+            "final_reasoning": text,
+            "step": state.get("step", 0) + 1,
+        }
+
+    except Exception as e:
+        logger.error("decision_llm_error", error=str(e))
+        return {
+            "action": "hold",
+            "instrument": state["instruments"][0] if state["instruments"] else "EUR_USD",
+            "confidence": 0.0,
+            "reasoning": f"LLM error: {e}",
+            "step": state.get("step", 0) + 1,
+        }
 
 
-# ------------------------------------------------------------------
-# Build the graph
-# ------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────
+# Build graph
+# ──────────────────────────────────────────────────────────
 
 def build_reasoning_graph() -> StateGraph:
     """Build the LangGraph reasoning chain for discretionary agents."""
     graph = StateGraph(ReasoningState)
 
-    graph.add_node("analyze", analyze_market)
+    graph.add_node("fetch_data", fetch_external_data)
+    graph.add_node("technicals", analyze_technicals)
+    graph.add_node("sentiment", analyze_sentiment)
+    graph.add_node("correlations", analyze_correlations)
     graph.add_node("decide", make_decision)
-    graph.add_node("risk", set_risk_levels)
 
-    graph.set_entry_point("analyze")
-    graph.add_edge("analyze", "decide")
-    graph.add_edge("decide", "risk")
-    graph.add_edge("risk", END)
+    graph.set_entry_point("fetch_data")
+    graph.add_edge("fetch_data", "technicals")
+    graph.add_edge("technicals", "sentiment")
+    graph.add_edge("sentiment", "correlations")
+    graph.add_edge("correlations", "decide")
+    graph.add_edge("decide", END)
 
     return graph
 
@@ -153,19 +335,25 @@ async def run_reasoning_chain(
     agent_config: dict[str, Any],
     market_context: dict[str, Any],
     personality: str = "cautious",
+    instruments: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Execute the reasoning graph and return the decision.
 
-    Returns:
-        Dict with keys: action, confidence, stop_loss, take_profit, reasoning
+    Returns dict with: action, instrument, confidence, stop_loss, take_profit, reasoning
     """
     initial_state: ReasoningState = {
         "agent_config": agent_config,
         "market_context": market_context,
         "personality": personality,
-        "analysis": "",
+        "instruments": instruments or [market_context.get("instrument", "EUR_USD")],
+        "external_data": {},
+        "technical_analysis": "",
+        "sentiment_analysis": "",
+        "correlation_analysis": "",
+        "final_reasoning": "",
         "action": "hold",
+        "instrument": (instruments or ["EUR_USD"])[0],
         "confidence": 0.0,
         "stop_loss": None,
         "take_profit": None,
@@ -177,6 +365,7 @@ async def run_reasoning_chain(
 
     return {
         "action": result["action"],
+        "instrument": result.get("instrument", initial_state["instrument"]),
         "confidence": result["confidence"],
         "stop_loss": result["stop_loss"],
         "take_profit": result["take_profit"],
