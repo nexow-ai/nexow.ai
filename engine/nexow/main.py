@@ -11,9 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from nexow.ai.factory import generate_strategy
 from nexow.config import settings
-from nexow.db.client import SupabaseClient
 from nexow.worker.loop import WorkerLoop
 
 structlog.configure(
@@ -29,34 +27,14 @@ structlog.configure(
 logger = structlog.get_logger(__name__)
 
 
-async def process_pending_agents(db: SupabaseClient) -> None:
-    """Check for agents with prompts that need AI-generated configs."""
-    pending = db.get_pending_agents()
-    for agent in pending:
-        prompt = agent.get("prompt", "")
-        if not prompt:
-            continue
-
-        logger.info("processing_pending_agent", agent_id=agent["id"], prompt=prompt)
-        try:
-            result = await generate_strategy(prompt)
-            db.update_agent_config(agent["id"], result.config)
-            db.client.table("agents").update({
-                "name": result.name,
-                "description": result.description,
-                "type": result.agent_type,
-                "status": "active",
-            }).eq("id", agent["id"]).execute()
-            logger.info("agent_configured", agent_id=agent["id"], name=result.name)
-        except Exception as e:
-            logger.error("agent_generation_failed", agent_id=agent["id"], error=str(e))
-
-
 async def main() -> None:
     """Start the Nexow engine."""
-    logger.info("nexow_engine_starting", env=settings.oanda_api_url)
+    logger.info(
+        "nexow_engine_starting",
+        oanda_url=settings.oanda_api_url,
+        tick_interval=settings.tick_interval_seconds,
+    )
 
-    db = SupabaseClient()
     worker = WorkerLoop()
 
     # Handle shutdown gracefully
@@ -64,10 +42,7 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(worker.stop()))
 
-    # Process any pending AI generations before starting the loop
-    await process_pending_agents(db)
-
-    # Start the main worker loop
+    # Start the main worker loop (handles pending agents + active agents)
     await worker.start()
 
 

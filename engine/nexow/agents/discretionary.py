@@ -17,13 +17,21 @@ class DiscretionaryAgent(AgentStrategy):
     Smart agent that uses an LLM to reason about market conditions,
     news sentiment, and technical context before making a decision.
 
-    Powered by LangGraph reasoning chains.
+    Powered by LangGraph reasoning chains with Tavily + NewsAPI data.
     """
 
     def __init__(self, agent_id: str, config: dict[str, Any]) -> None:
         super().__init__(agent_id, config)
         self.personality: str = config.get("personality", "cautious")
-        self.reasoning_depth: int = config.get("reasoning_depth", 2)
+        self.reasoning_depth: int = config.get("reasoning_depth", 3)
+        self.llm_provider: str = config.get("llm_provider", "openai")
+        self.llm_model: str = config.get("llm_model", "gpt-4o-mini")
+
+        # Parse instruments from portfolio config
+        portfolio = config.get("portfolio", {})
+        self.instruments: list[str] = [
+            ic["instrument"] for ic in portfolio.get("instruments", [])
+        ]
 
     async def evaluate(self, candles: list[Candle], current_price: float) -> Signal:
         """
@@ -40,12 +48,13 @@ class DiscretionaryAgent(AgentStrategy):
                 agent_config=self.config,
                 market_context=market_context,
                 personality=self.personality,
+                instruments=self.instruments or [instrument],
             )
 
             signal_type = SignalType(result.get("action", "hold"))
             return Signal(
                 type=signal_type,
-                instrument=instrument,
+                instrument=result.get("instrument", instrument),
                 confidence=result.get("confidence", 0.5),
                 stop_loss=result.get("stop_loss"),
                 take_profit=result.get("take_profit"),
