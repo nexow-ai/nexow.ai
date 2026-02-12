@@ -10,7 +10,8 @@ import {
   Trophy,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import { Logo } from "./logo";
 
 const navigation = [
@@ -23,6 +24,14 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  };
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-zinc-800/40 bg-zinc-950/80 backdrop-blur-xl">
@@ -67,7 +76,10 @@ export function Sidebar() {
 
       {/* Sign out */}
       <div className="p-3">
-        <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-zinc-600 transition-all duration-200 hover:bg-zinc-800/40 hover:text-zinc-300">
+        <button
+          onClick={handleSignOut}
+          className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-zinc-600 transition-all duration-200 hover:bg-zinc-800/40 hover:text-zinc-300"
+        >
           <LogOut className="h-[18px] w-[18px]" />
           Sign Out
         </button>
