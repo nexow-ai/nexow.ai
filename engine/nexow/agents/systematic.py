@@ -26,7 +26,7 @@ class SystematicAgent(AgentStrategy):
     every engine tick.
     """
 
-    # Class-level cache: {agent_id: last_candle_time}
+    # Class-level cache: {agent_id:instrument -> last_candle_time}
     _last_candle_times: dict[str, float] = {}
 
     def __init__(self, agent_id: str, config: dict[str, Any]) -> None:
@@ -50,25 +50,25 @@ class SystematicAgent(AgentStrategy):
                 reason="Not enough candle data",
             )
 
-        # Only evaluate on NEW candles — skip if we already evaluated this candle
-        latest_candle_time = candles[-1].time.timestamp() if hasattr(candles[-1].time, 'timestamp') else float(candles[-1].time.strftime('%s') if hasattr(candles[-1].time, 'strftime') else 0)
-        
-        # Use the second-to-last complete candle time as reference
-        # (last candle might still be forming)
-        ref_time = candles[-2].time.timestamp() if hasattr(candles[-2].time, 'timestamp') else 0
-        
-        prev_time = self._last_candle_times.get(self.agent_id, 0)
-        
+        # Only evaluate on NEW candles — skip if we already evaluated this candle.
+        # Key by agent_id:instrument so multi-instrument agents don't block each other.
+        cache_key = f"{self.agent_id}:{instrument}"
+
+        # Oanda returns only complete candles, so candles[-1] is the last
+        # complete candle. Use its timestamp as the reference.
+        ref_time = candles[-1].time.timestamp()
+
+        prev_time = self._last_candle_times.get(cache_key, 0)
+
         if ref_time <= prev_time:
-            # Same candle as last evaluation — skip
             return Signal(
                 type=SignalType.HOLD,
                 instrument=instrument,
                 reason="Waiting for new candle",
             )
-        
+
         # New candle! Update tracker and evaluate rules
-        self._last_candle_times[self.agent_id] = ref_time
+        self._last_candle_times[cache_key] = ref_time
 
         # Build market snapshot
         snap = MarketSnapshot(candles, current_price)
