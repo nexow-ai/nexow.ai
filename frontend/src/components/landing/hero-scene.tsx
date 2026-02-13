@@ -2,7 +2,7 @@
 
 import { useRef, useMemo, useCallback, useEffect, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { QuadraticBezierLine, Html, OrbitControls } from "@react-three/drei";
+import { QuadraticBezierLine, Html, OrbitControls, Stars } from "@react-three/drei";
 import * as THREE from "three";
 
 /* ── helpers ─────────────────────────────────────── */
@@ -250,6 +250,17 @@ function Scene() {
   return (
     <>
       <ambientLight intensity={0.05} />
+
+      {/* Galaxy starfield */}
+      <Stars
+        radius={80}
+        depth={60}
+        count={2500}
+        factor={3}
+        saturation={0.2}
+        fade
+        speed={0.5}
+      />
 
       <group position={[1.2, 0, 0]}>
         {/* Clean wireframe sphere — 28 segments for visible but elegant cells */}

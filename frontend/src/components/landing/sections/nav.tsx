@@ -22,7 +22,7 @@ export function Nav() {
       transition={{ duration: 0.6, ease: "easeOut" }}
       className={`fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-4 lg:px-16 transition-all duration-500 ${
         scrolled
-          ? "bg-zinc-950/70 backdrop-blur-xl border-b border-zinc-800/40 shadow-xl shadow-black/20"
+          ? "bg-zinc-950/80 backdrop-blur-xl shadow-lg shadow-black/30"
           : "bg-transparent"
       }`}
     >
