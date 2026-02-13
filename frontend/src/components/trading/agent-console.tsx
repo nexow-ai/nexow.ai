@@ -67,45 +67,46 @@ export function AgentConsole({ agentId, className }: AgentConsoleProps) {
 
   useEffect(() => {
     async function loadHistory() {
-      const supabase = createClient();
-      const { data: trades } = await (supabase.from as Function)("trades")
-        .select("*")
-        .eq("agent_id", agentId)
-        .order("opened_at", { ascending: false })
-        .limit(30);
+      try {
+        const supabase = createClient();
+        const { data: trades } = await (supabase.from as Function)("trades")
+          .select("*")
+          .eq("agent_id", agentId)
+          .order("opened_at", { ascending: false })
+          .limit(30);
 
-      if (trades && trades.length > 0) {
-        const entries: LogEntry[] = [];
+        if (trades && trades.length > 0) {
+          const entries: LogEntry[] = [];
 
-        for (const trade of (trades as Array<Record<string, unknown>>).reverse()) {
-          // Entry event
-          entries.push({
-            id: `entry-${trade.id}`,
-            time: new Date(trade.opened_at as string),
-            level: "trade",
-            message: `SIGNAL ${(trade.direction as string).toUpperCase()} ${(trade.instrument as string).replace("_", "/")} @ ${Number(trade.entry_price).toFixed(5)}`,
-          });
-
-          // Exit event (if closed)
-          if (trade.status === "closed" && trade.closed_at) {
-            const returnPct = trade.return_pct as number | null;
-            const returnStr =
-              returnPct != null
-                ? ` ${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(2)}%`
-                : "";
+          for (const trade of (trades as Array<Record<string, unknown>>).reverse()) {
             entries.push({
-              id: `exit-${trade.id}`,
-              time: new Date(trade.closed_at as string),
-              level: "close",
-              message: `CLOSED ${(trade.instrument as string).replace("_", "/")} @ ${Number(trade.exit_price).toFixed(5)}${returnStr}`,
+              id: `entry-${trade.id}`,
+              time: new Date(trade.opened_at as string),
+              level: "trade",
+              message: `SIGNAL ${(trade.direction as string).toUpperCase()} ${(trade.instrument as string).replace("_", "/")} @ ${Number(trade.entry_price).toFixed(5)}`,
             });
-          }
-        }
 
-        setLogs(entries);
+            if (trade.status === "closed" && trade.closed_at) {
+              const returnPct = trade.return_pct as number | null;
+              const returnStr =
+                returnPct != null
+                  ? ` ${returnPct >= 0 ? "+" : ""}${returnPct.toFixed(2)}%`
+                  : "";
+              entries.push({
+                id: `exit-${trade.id}`,
+                time: new Date(trade.closed_at as string),
+                level: "close",
+                message: `CLOSED ${(trade.instrument as string).replace("_", "/")} @ ${Number(trade.exit_price).toFixed(5)}${returnStr}`,
+              });
+            }
+          }
+
+          setLogs(entries);
+        }
+      } catch {
+        // Trade history unavailable
       }
 
-      // Boot message
       addLog({
         time: new Date(),
         level: "info",
@@ -164,33 +165,38 @@ export function AgentConsole({ agentId, className }: AgentConsoleProps) {
         setConnected(status === "SUBSCRIBED");
       });
 
-    // Also subscribe to agent_logs table (for when the engine writes logs)
-    const logsChannel = supabase
-      .channel(`console:logs:${agentId}`)
-      .on(
-        "postgres_changes" as never,
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "agent_logs",
-          filter: `agent_id=eq.${agentId}`,
-        },
-        (payload: Record<string, unknown>) => {
-          const record = payload.new as Record<string, unknown> | null;
-          if (!record) return;
+    // Also subscribe to agent_logs table (if it exists — graceful)
+    let logsChannel: ReturnType<typeof supabase.channel> | null = null;
+    try {
+      logsChannel = supabase
+        .channel(`console:logs:${agentId}`)
+        .on(
+          "postgres_changes" as never,
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "agent_logs",
+            filter: `agent_id=eq.${agentId}`,
+          },
+          (payload: Record<string, unknown>) => {
+            const record = payload.new as Record<string, unknown> | null;
+            if (!record) return;
 
-          addLog({
-            time: new Date(record.created_at as string),
-            level: (record.level as LogEntry["level"]) || "info",
-            message: record.message as string,
-          });
-        }
-      )
-      .subscribe();
+            addLog({
+              time: new Date(record.created_at as string),
+              level: (record.level as LogEntry["level"]) || "info",
+              message: record.message as string,
+            });
+          }
+        )
+        .subscribe();
+    } catch {
+      // agent_logs table may not exist yet
+    }
 
     return () => {
       supabase.removeChannel(channel);
-      supabase.removeChannel(logsChannel);
+      if (logsChannel) supabase.removeChannel(logsChannel);
     };
   }, [agentId, addLog]);
 
