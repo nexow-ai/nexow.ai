@@ -1,8 +1,13 @@
 "use client";
 
-import { Bell, Search } from "lucide-react";
+import { useSubscription } from "@/hooks/use-subscription";
+import { formatCredits } from "@/lib/stripe/plans";
+import { Bell, Search, Sparkles } from "lucide-react";
+import Link from "next/link";
 
 export function Header() {
+  const { data: subscription, plan, loading } = useSubscription();
+
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-zinc-800/40 bg-zinc-950/60 px-6 backdrop-blur-xl">
       <div className="flex items-center gap-4">
@@ -17,6 +22,19 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* AI Credits */}
+        {!loading && subscription && (
+          <Link
+            href="/billing"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-800/40 bg-zinc-900/30 px-3 py-1.5 transition-all hover:border-zinc-700/50 hover:bg-zinc-800/40"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-purple-400" />
+            <span className="text-xs font-medium text-zinc-300">
+              {formatCredits(subscription.creditsRemaining)}
+            </span>
+          </Link>
+        )}
+
         <button className="relative rounded-xl p-2.5 text-zinc-500 transition-all duration-200 hover:bg-zinc-800/40 hover:text-zinc-300">
           <Bell className="h-[18px] w-[18px]" />
           <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-emerald-500" />
@@ -24,13 +42,17 @@ export function Header() {
 
         <div className="mx-1 h-6 w-px bg-zinc-800/60" />
 
-        <div className="flex items-center gap-3">
+        <Link href="/billing" className="flex items-center gap-3 group">
           <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-emerald-400 via-cyan-400 to-purple-400 shadow-lg shadow-emerald-500/10" />
           <div className="hidden sm:block">
-            <p className="text-sm font-medium text-zinc-200">Trader</p>
-            <p className="text-[11px] text-zinc-600">Free Plan</p>
+            <p className="text-sm font-medium text-zinc-200 group-hover:text-zinc-100 transition-colors">
+              Trader
+            </p>
+            <p className="text-[11px] text-zinc-600">
+              {loading ? "..." : `${plan.name} Plan`}
+            </p>
           </div>
-        </div>
+        </Link>
       </div>
     </header>
   );

@@ -299,9 +299,6 @@ export function HeroScene() {
         <Scene />
       </Canvas>
       <div className="pointer-events-none absolute inset-0 bg-zinc-950/30" />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-zinc-950/20 via-transparent to-zinc-950" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_65%_50%,transparent_30%,rgba(5,5,7,0.6)_70%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-zinc-950/60 via-zinc-950/15 to-transparent" />
     </div>
   );
 }

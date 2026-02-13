@@ -60,7 +60,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="mt-16 flex flex-col items-center justify-between gap-4 border-t border-zinc-800/30 pt-8 sm:flex-row">
           <p className="text-xs text-zinc-700">
-            &copy; {new Date().getFullYear()} Nexow. All rights reserved.
+            &copy; 2025 Nexow. All rights reserved.
           </p>
           <p className="text-[10px] text-zinc-800 max-w-md text-center sm:text-right">
             Trading involves risk. Past performance is not indicative of future results.

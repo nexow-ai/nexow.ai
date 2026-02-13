@@ -4,9 +4,11 @@ import { cn } from "@/lib/utils";
 import {
   Bot,
   Copy,
+  CreditCard,
   LayoutDashboard,
   LogOut,
   Plus,
+  Sparkles,
   Trophy,
 } from "lucide-react";
 import Link from "next/link";
@@ -20,6 +22,8 @@ const navigation = [
   { name: "Create Agent", href: "/agents/new", icon: Plus },
   { name: "Wall of Fame", href: "/leaderboard", icon: Trophy },
   { name: "Copy Trading", href: "/copy", icon: Copy },
+  { name: "Pricing", href: "/pricing", icon: Sparkles },
+  { name: "Billing", href: "/billing", icon: CreditCard },
 ];
 
 export function Sidebar() {
