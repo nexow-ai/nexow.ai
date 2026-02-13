@@ -11,6 +11,10 @@ import {
 } from "lightweight-charts";
 import { createClient } from "@/lib/supabase/client";
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 interface TradingViewWidgetProps {
   instrument?: string;
   granularity?: string;
@@ -28,6 +32,34 @@ interface CandleData {
   volume: number;
 }
 
+interface TradeRecord {
+  id: string;
+  instrument: string;
+  direction: "buy" | "sell";
+  entry_price: number;
+  exit_price: number | null;
+  return_pct: number | null;
+  status: "open" | "closed";
+  opened_at: string;
+  closed_at: string | null;
+}
+
+// Granularity -> seconds per candle
+const GRAN_SECONDS: Record<string, number> = {
+  M1: 60,
+  M5: 300,
+  M15: 900,
+  M30: 1800,
+  H1: 3600,
+  H4: 14400,
+  D: 86400,
+  W: 604800,
+};
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export function TradingViewWidget({
   instrument = "EUR_USD",
   granularity = "M5",
@@ -37,19 +69,37 @@ export function TradingViewWidget({
 }: TradingViewWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const candleSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const candleSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(
+    null
+  );
   const candlesRef = useRef<CandleData[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [status, setStatus] = useState<"loading" | "live" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "live" | "error">(
+    "loading"
+  );
+
+  // ── Data fetchers ──────────────────────────────────────────────────────
 
   const fetchCandles = useCallback(async () => {
     try {
       const res = await fetch(
-        `/api/candles?instrument=${instrument}&granularity=${granularity}&count=200`
+        `/api/candles?instrument=${instrument}&granularity=${granularity}&count=300`
       );
       if (!res.ok) throw new Error("Failed to fetch candles");
       const data = await res.json();
-      return data.candles as CandleData[];
+      const candles = (data.candles ?? []) as CandleData[];
+
+      // Deduplicate and sort by time
+      const seen = new Set<number>();
+      const unique: CandleData[] = [];
+      for (const c of candles) {
+        if (!seen.has(c.time)) {
+          seen.add(c.time);
+          unique.push(c);
+        }
+      }
+      unique.sort((a, b) => a.time - b.time);
+      return unique;
     } catch {
       return null;
     }
@@ -65,7 +115,7 @@ export function TradingViewWidget({
     }
   }, [instrument]);
 
-  const fetchTrades = useCallback(async () => {
+  const fetchTrades = useCallback(async (): Promise<TradeRecord[]> => {
     if (!agentId) return [];
     try {
       const supabase = createClient();
@@ -73,18 +123,18 @@ export function TradingViewWidget({
         .select("*")
         .eq("agent_id", agentId)
         .order("opened_at", { ascending: true });
-      return (data ?? []) as Array<{
-        opened_at: string;
-        direction: string;
-        entry_price: number;
-      }>;
+      return (data ?? []) as TradeRecord[];
     } catch {
       return [];
     }
   }, [agentId]);
 
+  // ── Chart lifecycle ────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!containerRef.current) return;
+
+    setStatus("loading");
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -107,8 +157,18 @@ export function TradingViewWidget({
         borderColor: "#27272a",
       },
       crosshair: {
-        vertLine: { color: "#10b981", width: 1, style: 2, labelBackgroundColor: "#10b981" },
-        horzLine: { color: "#10b981", width: 1, style: 2, labelBackgroundColor: "#10b981" },
+        vertLine: {
+          color: "#10b981",
+          width: 1,
+          style: 2,
+          labelBackgroundColor: "#10b981",
+        },
+        horzLine: {
+          color: "#10b981",
+          width: 1,
+          style: 2,
+          labelBackgroundColor: "#10b981",
+        },
       },
     });
     chartRef.current = chart;
@@ -122,6 +182,8 @@ export function TradingViewWidget({
       wickUpColor: "#10b981",
     });
     candleSeriesRef.current = candleSeries;
+
+    // ── Load initial data ──────────────────────────────────────────────
 
     async function loadData() {
       const candles = await fetchCandles();
@@ -142,16 +204,18 @@ export function TradingViewWidget({
         }))
       );
 
-      // Trade markers — snap each trade to the nearest candle time
+      // ── Trade markers (entries + exits) ──────────────────────────────
+
       const trades = await fetchTrades();
       if (trades.length > 0 && candles.length > 0) {
         const candleTimes = candles.map((c) => c.time);
 
-        const snapToCandle = (tradeEpoch: number): number => {
+        const snapToCandle = (epochSec: number): number => {
+          // Binary-search-like: find closest candle time
           let closest = candleTimes[0];
-          let minDiff = Math.abs(tradeEpoch - closest);
+          let minDiff = Math.abs(epochSec - closest);
           for (const ct of candleTimes) {
-            const diff = Math.abs(tradeEpoch - ct);
+            const diff = Math.abs(epochSec - ct);
             if (diff < minDiff) {
               minDiff = diff;
               closest = ct;
@@ -160,16 +224,53 @@ export function TradingViewWidget({
           return closest;
         };
 
-        const markers = trades.map((trade) => {
-          const tradeEpoch = Math.floor(new Date(trade.opened_at).getTime() / 1000);
-          return {
-            time: snapToCandle(tradeEpoch) as Time,
-            position: (trade.direction === "buy" ? "belowBar" : "aboveBar") as "belowBar" | "aboveBar",
+        type MarkerDef = {
+          time: Time;
+          position: "belowBar" | "aboveBar";
+          color: string;
+          shape: "arrowUp" | "arrowDown" | "circle";
+          text: string;
+        };
+
+        const markers: MarkerDef[] = [];
+
+        for (const trade of trades) {
+          // Entry marker
+          const entryEpoch = Math.floor(
+            new Date(trade.opened_at).getTime() / 1000
+          );
+          markers.push({
+            time: snapToCandle(entryEpoch) as Time,
+            position: trade.direction === "buy" ? "belowBar" : "aboveBar",
             color: trade.direction === "buy" ? "#10b981" : "#ef4444",
-            shape: (trade.direction === "buy" ? "arrowUp" : "arrowDown") as "arrowUp" | "arrowDown",
+            shape: trade.direction === "buy" ? "arrowUp" : "arrowDown",
             text: `${trade.direction.toUpperCase()} @ ${Number(trade.entry_price).toFixed(5)}`,
-          };
-        });
+          });
+
+          // Exit marker (only for closed trades)
+          if (
+            trade.status === "closed" &&
+            trade.closed_at &&
+            trade.exit_price != null
+          ) {
+            const exitEpoch = Math.floor(
+              new Date(trade.closed_at).getTime() / 1000
+            );
+            const returnStr =
+              trade.return_pct != null
+                ? ` ${trade.return_pct >= 0 ? "+" : ""}${Number(trade.return_pct).toFixed(2)}%`
+                : "";
+            markers.push({
+              time: snapToCandle(exitEpoch) as Time,
+              position: (trade.return_pct ?? 0) >= 0 ? "aboveBar" : "belowBar",
+              color: (trade.return_pct ?? 0) >= 0 ? "#10b981" : "#ef4444",
+              shape: "circle",
+              text: `CLOSE @ ${Number(trade.exit_price).toFixed(5)}${returnStr}`,
+            });
+          }
+        }
+
+        // Sort by time (required by lightweight-charts)
         markers.sort((a, b) => (a.time as number) - (b.time as number));
         createSeriesMarkers(candleSeries, markers);
       }
@@ -180,6 +281,8 @@ export function TradingViewWidget({
 
     loadData();
 
+    // ── Resize handler ─────────────────────────────────────────────────
+
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth });
@@ -187,7 +290,11 @@ export function TradingViewWidget({
     };
     window.addEventListener("resize", handleResize);
 
-    // Real-time price polling
+    // ── Real-time price polling ────────────────────────────────────────
+    // Uses proper candle boundary alignment to avoid drift.
+
+    const duration = GRAN_SECONDS[granularity] || 300;
+
     pollingRef.current = setInterval(async () => {
       const price = await fetchPrice();
       if (!price || !candleSeriesRef.current) return;
@@ -197,14 +304,12 @@ export function TradingViewWidget({
 
       const lastCandle = candles[candles.length - 1];
 
-      const granMap: Record<string, number> = {
-        M1: 60, M5: 300, M15: 900, M30: 1800,
-        H1: 3600, H4: 14400, D: 86400,
-      };
-      const duration = granMap[granularity] || 300;
-      const candleEnd = lastCandle.time + duration;
+      // Align to candle boundary: which candle does this price belong to?
+      const currentCandleStart =
+        Math.floor(price.time / duration) * duration;
 
-      if (price.time >= lastCandle.time && price.time < candleEnd) {
+      if (currentCandleStart === lastCandle.time) {
+        // Same candle — update OHLC
         lastCandle.close = price.mid;
         lastCandle.high = Math.max(lastCandle.high, price.mid);
         lastCandle.low = Math.min(lastCandle.low, price.mid);
@@ -215,9 +320,10 @@ export function TradingViewWidget({
           low: lastCandle.low,
           close: lastCandle.close,
         });
-      } else if (price.time >= candleEnd) {
+      } else if (currentCandleStart > lastCandle.time) {
+        // New candle(s) — create at the correct boundary
         const newCandle: CandleData = {
-          time: candleEnd,
+          time: currentCandleStart,
           open: price.mid,
           high: price.mid,
           low: price.mid,
@@ -233,32 +339,38 @@ export function TradingViewWidget({
           close: newCandle.close,
         });
       }
-    }, 5000);
+    }, 3000);
+
+    // ── Cleanup ────────────────────────────────────────────────────────
 
     return () => {
       window.removeEventListener("resize", handleResize);
       if (pollingRef.current) clearInterval(pollingRef.current);
       chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      candlesRef.current = [];
     };
   }, [instrument, granularity, agentId, height, fetchCandles, fetchPrice, fetchTrades]);
 
+  // ── Render ─────────────────────────────────────────────────────────────
+
   return (
     <div className={className}>
-      <div className="mb-3 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold text-zinc-200">{instrument.replace("_", "/")}</span>
-          <span className="rounded-lg bg-zinc-800/50 px-2 py-0.5 text-zinc-500">{granularity}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {status === "live" && (
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              <span className="text-emerald-400">Live</span>
-            </span>
-          )}
-          {status === "loading" && <span className="text-zinc-600">Loading...</span>}
-          {status === "error" && <span className="text-red-400">Disconnected</span>}
-        </div>
+      {/* Status indicator */}
+      <div className="mb-2 flex items-center justify-end text-xs">
+        {status === "live" && (
+          <span className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+            <span className="text-emerald-400">Live</span>
+          </span>
+        )}
+        {status === "loading" && (
+          <span className="text-zinc-600">Loading chart...</span>
+        )}
+        {status === "error" && (
+          <span className="text-red-400">Failed to load data</span>
+        )}
       </div>
       <div ref={containerRef} />
     </div>
