@@ -37,7 +37,9 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
     refetch: refetchTrades,
   } = useTrades(id);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+
+  // Live prices per instrument (for accurate PnL on all open trades)
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
 
   // Chart controlled state
   const [activeInstrument, setActiveInstrument] = useState<string>("");
@@ -58,29 +60,43 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
       : [{ instrument: agent.instrument, timeframe: agent.timeframe }]
     : [];
 
-  const fetchLivePrice = useCallback(async () => {
-    if (!activeInstrument) return;
-    try {
-      const res = await fetch(
-        `/api/price?instrument=${activeInstrument}`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentPrice(data.mid);
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [activeInstrument]);
+  // Fetch live prices for all instruments that have open trades
+  const fetchLivePrices = useCallback(async () => {
+    const openTrades = trades.filter((t) => t.status === "open");
+    if (openTrades.length === 0) return;
+
+    // Get unique instruments from open trades
+    const openInstruments = [
+      ...new Set(openTrades.map((t) => t.instrument)),
+    ];
+
+    const prices: Record<string, number> = { ...livePrices };
+
+    await Promise.all(
+      openInstruments.map(async (inst) => {
+        try {
+          const res = await fetch(`/api/price?instrument=${inst}`);
+          if (res.ok) {
+            const data = await res.json();
+            prices[inst] = data.mid;
+          }
+        } catch {
+          /* ignore */
+        }
+      })
+    );
+
+    setLivePrices(prices);
+  }, [trades, livePrices]);
 
   useEffect(() => {
-    fetchLivePrice();
+    fetchLivePrices();
     const interval = setInterval(() => {
-      fetchLivePrice();
+      fetchLivePrices();
       refetchTrades();
     }, 10000);
     return () => clearInterval(interval);
-  }, [fetchLivePrice, refetchTrades]);
+  }, [fetchLivePrices, refetchTrades]);
 
   async function handleToggleStatus() {
     if (!agent) return;
@@ -336,13 +352,14 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
                           {trade.return_pct >= 0 ? "+" : ""}
                           {Number(trade.return_pct).toFixed(2)}%
                         </span>
-                      ) : trade.status === "open" && currentPrice ? (
+                      ) : trade.status === "open" && livePrices[trade.instrument] ? (
                         (() => {
                           const entry = Number(trade.entry_price);
+                          const price = livePrices[trade.instrument];
                           const unreturned =
                             trade.direction === "buy"
-                              ? ((currentPrice - entry) / entry) * 100
-                              : ((entry - currentPrice) / entry) * 100;
+                              ? ((price - entry) / entry) * 100
+                              : ((entry - price) / entry) * 100;
                           return (
                             <span
                               className={

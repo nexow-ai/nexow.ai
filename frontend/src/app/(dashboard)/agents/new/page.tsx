@@ -321,7 +321,7 @@ export default function NewAgentPage() {
       const instrumentsArr = Array.from(selectedInstruments);
       const primaryInstrument = instrumentsArr[0] ?? "EUR_USD";
 
-      // Extract timeframes from generated config, or default to H1
+      // Extract primary timeframe from generated config, or default to H1
       const portfolio = (config as Record<string, unknown>).portfolio as
         | Record<string, unknown>
         | undefined;
@@ -330,6 +330,18 @@ export default function NewAgentPage() {
       >;
       const primaryTimeframe =
         (configInstruments[0]?.timeframe as string) ?? "H1";
+
+      // Build unique instruments list (one entry per instrument)
+      // The full multi-timeframe portfolio is preserved in config.portfolio
+      const uniqueInstruments = instrumentsArr.map((id) => {
+        const match = configInstruments.find(
+          (ci) => ci.instrument === id
+        );
+        return {
+          instrument: id,
+          timeframe: (match?.timeframe as string) ?? "H1",
+        };
+      });
 
       const { data, error: insertError } = await (
         supabase.from as Function
@@ -342,9 +354,7 @@ export default function NewAgentPage() {
           config,
           prompt: buildPrompt(),
           instrument: primaryInstrument,
-          instruments: configInstruments.length > 0
-            ? configInstruments
-            : instrumentsArr.map((id) => ({ instrument: id, timeframe: "H1" })),
+          instruments: uniqueInstruments,
           timeframe: primaryTimeframe,
           llm_provider:
             (config as Record<string, unknown>).llm_provider ?? "openai",
