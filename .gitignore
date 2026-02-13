@@ -38,6 +38,9 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 
+# Supabase
+supabase/.temp/
+
 # Misc
 *.log
 *.pid
