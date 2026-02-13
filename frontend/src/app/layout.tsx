@@ -13,9 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nexow — Decentralized Hedge Fund",
+  title: "Nexow — The Agentic Social Trading Platform",
   description:
-    "Create 24/7 algorithmic trading agents using natural language. Compete on the Wall of Fame and earn through blind social trading.",
+    "Build discretionary or systematic trading agents with plain English. Trade FX, Indices, Commodities, Stocks, and Crypto. Compete on The Arena and earn through blind social trading.",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({
