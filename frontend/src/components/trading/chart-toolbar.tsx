@@ -19,16 +19,11 @@ export function ChartToolbar({
   onInstrumentChange,
   onTimeframeChange,
 }: ChartToolbarProps) {
-  // Deduplicate instruments by ID (same instrument may appear with different timeframes)
-  const uniqueInstruments = instruments.filter(
-    (inst, i, arr) => arr.findIndex((a) => a.instrument === inst.instrument) === i
-  );
-
   return (
     <div className="flex items-center justify-between rounded-t-xl border border-zinc-800/60 bg-zinc-900/50 px-3 py-2">
       {/* Asset tabs */}
       <div className="flex items-center gap-1">
-        {uniqueInstruments.map((inst) => {
+        {instruments.map((inst) => {
           const isActive = inst.instrument === activeInstrument;
           return (
             <button

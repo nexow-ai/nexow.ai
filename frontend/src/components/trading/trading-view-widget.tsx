@@ -122,12 +122,13 @@ export function TradingViewWidget({
       const { data } = await (supabase.from as Function)("trades")
         .select("*")
         .eq("agent_id", agentId)
+        .eq("instrument", instrument)
         .order("opened_at", { ascending: true });
       return (data ?? []) as TradeRecord[];
     } catch {
       return [];
     }
-  }, [agentId]);
+  }, [agentId, instrument]);
 
   // ── Chart lifecycle ────────────────────────────────────────────────────
 
@@ -208,20 +209,33 @@ export function TradingViewWidget({
 
       const trades = await fetchTrades();
       if (trades.length > 0 && candles.length > 0) {
-        const candleTimes = candles.map((c) => c.time);
+        const candleTimeSet = new Set(candles.map((c) => c.time));
+        const firstCandle = candles[0].time;
+        const lastCandle = candles[candles.length - 1].time;
 
-        const snapToCandle = (epochSec: number): number => {
-          // Binary-search-like: find closest candle time
-          let closest = candleTimes[0];
-          let minDiff = Math.abs(epochSec - closest);
-          for (const ct of candleTimes) {
-            const diff = Math.abs(epochSec - ct);
-            if (diff < minDiff) {
-              minDiff = diff;
-              closest = ct;
+        // Snap a trade timestamp to the candle that contains it.
+        // Uses floor division to find the candle boundary, then
+        // verifies it exists in the loaded data.
+        const snapToCandle = (epochSec: number): number | null => {
+          const candleStart =
+            Math.floor(epochSec / duration) * duration;
+
+          // Exact match in loaded candles
+          if (candleTimeSet.has(candleStart)) return candleStart;
+
+          // Trade is before loaded range or after — skip it
+          if (candleStart < firstCandle || candleStart > lastCandle)
+            return null;
+
+          // Candle might not exist (gap) — find nearest loaded candle
+          // that is <= candleStart
+          let best: number | null = null;
+          for (const ct of candleTimeSet) {
+            if (ct <= candleStart && (best === null || ct > best)) {
+              best = ct;
             }
           }
-          return closest;
+          return best;
         };
 
         type MarkerDef = {
@@ -239,13 +253,16 @@ export function TradingViewWidget({
           const entryEpoch = Math.floor(
             new Date(trade.opened_at).getTime() / 1000
           );
-          markers.push({
-            time: snapToCandle(entryEpoch) as Time,
-            position: trade.direction === "buy" ? "belowBar" : "aboveBar",
-            color: trade.direction === "buy" ? "#10b981" : "#ef4444",
-            shape: trade.direction === "buy" ? "arrowUp" : "arrowDown",
-            text: `${trade.direction.toUpperCase()} @ ${Number(trade.entry_price).toFixed(5)}`,
-          });
+          const entryCandle = snapToCandle(entryEpoch);
+          if (entryCandle !== null) {
+            markers.push({
+              time: entryCandle as Time,
+              position: trade.direction === "buy" ? "belowBar" : "aboveBar",
+              color: trade.direction === "buy" ? "#10b981" : "#ef4444",
+              shape: trade.direction === "buy" ? "arrowUp" : "arrowDown",
+              text: `${trade.direction.toUpperCase()} @ ${Number(trade.entry_price).toFixed(5)}`,
+            });
+          }
 
           // Exit marker (only for closed trades)
           if (
@@ -256,17 +273,20 @@ export function TradingViewWidget({
             const exitEpoch = Math.floor(
               new Date(trade.closed_at).getTime() / 1000
             );
-            const returnStr =
-              trade.return_pct != null
-                ? ` ${trade.return_pct >= 0 ? "+" : ""}${Number(trade.return_pct).toFixed(2)}%`
-                : "";
-            markers.push({
-              time: snapToCandle(exitEpoch) as Time,
-              position: (trade.return_pct ?? 0) >= 0 ? "aboveBar" : "belowBar",
-              color: (trade.return_pct ?? 0) >= 0 ? "#10b981" : "#ef4444",
-              shape: "circle",
-              text: `CLOSE @ ${Number(trade.exit_price).toFixed(5)}${returnStr}`,
-            });
+            const exitCandle = snapToCandle(exitEpoch);
+            if (exitCandle !== null) {
+              const returnStr =
+                trade.return_pct != null
+                  ? ` ${trade.return_pct >= 0 ? "+" : ""}${Number(trade.return_pct).toFixed(2)}%`
+                  : "";
+              markers.push({
+                time: exitCandle as Time,
+                position: (trade.return_pct ?? 0) >= 0 ? "aboveBar" : "belowBar",
+                color: (trade.return_pct ?? 0) >= 0 ? "#10b981" : "#ef4444",
+                shape: "circle",
+                text: `CLOSE @ ${Number(trade.exit_price).toFixed(5)}${returnStr}`,
+              });
+            }
           }
         }
 
