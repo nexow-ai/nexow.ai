@@ -1,30 +1,86 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { canDeployAgent, hasCredits } from "@/lib/stripe/guards";
+import { CREDIT_COSTS } from "@/lib/stripe/plans";
 
 export async function POST(request: NextRequest) {
-  const { prompt } = await request.json();
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  const body = await request.json();
+  const {
+    prompt,
+    instruments,
+    agent_type,
+    entry_description,
+    data_providers,
+    exit_config,
+  } = body;
 
   if (!prompt || typeof prompt !== "string") {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
   }
 
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-  if (!OPENAI_API_KEY) {
-    return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
+  // Check plan limits
+  const deployCheck = await canDeployAgent(user.id, agent_type ?? "systematic");
+  if (!deployCheck.allowed) {
+    return NextResponse.json(
+      { error: deployCheck.reason },
+      { status: 403 }
+    );
   }
 
-  const systemPrompt = `You are Nexow's Agent Factory. Convert the user's trading idea into a JSON config with dynamic trading rules.
+  // Check credits
+  const hasCreds = await hasCredits(user.id, CREDIT_COSTS.agentGeneration);
+  if (!hasCreds) {
+    return NextResponse.json(
+      { error: "Insufficient AI credits. Upgrade your plan for more credits." },
+      { status: 403 }
+    );
+  }
+
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) {
+    return NextResponse.json(
+      { error: "OpenAI API key not configured" },
+      { status: 500 }
+    );
+  }
+
+  const instrumentsList =
+    Array.isArray(instruments) && instruments.length > 0
+      ? instruments.map((i: string) => i.replace("_", "/")).join(", ")
+      : "Not specified";
+
+  const systemPrompt = `You are Nexow's Agent Factory. Convert the user's structured trading strategy into a JSON config with dynamic trading rules.
 
 Agents are SIGNAL PROVIDERS — they emit entry signals (BUY/SELL) and exit signals (CLOSE).
 There is NO position sizing, no volume, no risk management. Agents are compared purely by gross return %.
 
+The user has already selected their instruments, entry strategy, and exit conditions. Your job is to translate their intent into a precise, executable config.
+
+IMPORTANT: The user's entry/exit descriptions may reference multiple timeframes on the same instrument
+(e.g. "buy when M15 candles are red and H4 is green"). Extract ALL referenced timeframes and include
+each instrument+timeframe combination in the portfolio config. If no specific timeframe is mentioned, default to H1.
+
 Return a JSON object with these exact fields:
 {
-  "agent_type": "systematic" or "discretionary",
+  "agent_type": "${agent_type || "systematic"}",
   "name": "Creative agent name",
   "description": "1-2 sentence description",
-  "portfolio_summary": "e.g. EUR/USD + XAU/USD on H1",
+  "portfolio_summary": "e.g. EUR/USD on M15 + H4",
   "config": { ... }
 }
+
+## User's selected instruments: ${instrumentsList}
+## Agent type: ${agent_type || "systematic"}
+${agent_type === "discretionary" && data_providers ? `## Data providers: ${data_providers.join(", ")}` : ""}
 
 ## For SYSTEMATIC agents, config must contain "rules" with buy_rules and sell_rules:
 
@@ -39,28 +95,32 @@ Available condition types:
 - Time: "every_candle" (DCA), "every_n_candles"
 - Meta: "has_no_open_trades", "has_open_trades"
 
-## Config structure:
+## Config structure for SYSTEMATIC:
+
+Each condition can optionally include a "timeframe" param to specify which timeframe it applies to.
+The portfolio instruments array should list every instrument+timeframe combination the agent needs data for.
 
 {
-  "portfolio": {"instruments": [{"instrument": "EUR_USD", "timeframe": "M5"}]},
+  "portfolio": {"instruments": [{"instrument": "EUR_USD", "timeframe": "M15"}, {"instrument": "EUR_USD", "timeframe": "H4"}]},
   "rules": {
     "buy_rules": {"operator": "and", "conditions": [...]},
     "sell_rules": {"operator": "and", "conditions": [...]}
   },
-  "exit": {"stop_loss_pct": 2.0, "take_profit_pct": 4.0}
+  "exit": {
+    "stop_loss_pct": 2.0,
+    "take_profit_pct": 4.0
+    ${exit_config?.trailing_stop ? ', "trailing_stop_pct": ...' : ""}
+    ${exit_config?.max_daily_loss_pct ? ', "max_daily_loss_pct": ...' : ""}
+    ${exit_config?.daily_profit_target_pct ? ', "daily_profit_target_pct": ...' : ""}
+  }
 }
-
-Exit levels are percentages from entry price:
-- Scalping: SL 0.3-0.5%, TP 0.5-1%
-- Day trading: SL 1-2%, TP 2-4%
-- Swing trading: SL 2-5%, TP 5-10%
 
 ## For DISCRETIONARY agents, config includes: llm_provider, llm_model, personality, focus_areas, use_web_search, use_news_feed, evaluation_schedule, portfolio, exit
 
-Available instruments: EUR_USD, GBP_USD, USD_JPY, XAU_USD, USD_CAD, AUD_USD, NZD_USD, USD_CHF
-Available timeframes: M1, M5, M15, M30, H1, H4, D
+Use the EXACT instruments the user selected. Determine timeframes from the entry/exit description.
+Use the exit values the user specified (stop_loss_pct, take_profit_pct, etc) — do NOT invent different values.
 
-IMPORTANT: Always generate both buy_rules AND sell_rules. Always include an "exit" object. Only return valid JSON.`;
+IMPORTANT: Always generate both buy_rules AND sell_rules for systematic agents. Always include an "exit" object. Only return valid JSON.`;
 
   try {
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -90,10 +150,23 @@ IMPORTANT: Always generate both buy_rules AND sell_rules. Always include an "exi
     const content = data.choices?.[0]?.message?.content;
 
     if (!content) {
-      return NextResponse.json({ error: "No response from AI" }, { status: 500 });
+      return NextResponse.json(
+        { error: "No response from AI" },
+        { status: 500 }
+      );
     }
 
     const generated = JSON.parse(content);
+
+    // Consume credits after successful generation
+    await (supabase.rpc as Function)("consume_credits", {
+      p_user_id: user.id,
+      p_amount: CREDIT_COSTS.agentGeneration,
+      p_action: "agent_generation",
+      p_agent_id: null,
+      p_description: `Generated ${agent_type ?? "systematic"} agent`,
+    });
+
     return NextResponse.json(generated);
   } catch (err) {
     return NextResponse.json(
