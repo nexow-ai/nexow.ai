@@ -5,8 +5,21 @@
 -- Subscription tier enum
 CREATE TYPE subscription_tier AS ENUM ('free', 'starter', 'pro', 'elite');
 
--- Subscription status
-CREATE TYPE subscription_status AS ENUM ('active', 'canceled', 'past_due', 'trialing', 'incomplete');
+-- Subscription status — extend existing enum with new values
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'canceled' AND enumtypid = 'subscription_status'::regtype) THEN
+    ALTER TYPE subscription_status ADD VALUE 'canceled';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'past_due' AND enumtypid = 'subscription_status'::regtype) THEN
+    ALTER TYPE subscription_status ADD VALUE 'past_due';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'trialing' AND enumtypid = 'subscription_status'::regtype) THEN
+    ALTER TYPE subscription_status ADD VALUE 'trialing';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'incomplete' AND enumtypid = 'subscription_status'::regtype) THEN
+    ALTER TYPE subscription_status ADD VALUE 'incomplete';
+  END IF;
+END $$;
 
 -- ============================================================================
 -- Subscriptions table — one active subscription per user

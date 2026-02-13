@@ -29,13 +29,13 @@ ALTER TABLE trades
 -- 2. Agents table — remove risk management
 -- ============================================
 
+-- Drop the public view first (it depends on columns being removed)
+DROP VIEW IF EXISTS agents_public;
+
 ALTER TABLE agents
     DROP COLUMN IF EXISTS max_drawdown_pct,
     DROP COLUMN IF EXISTS risk_per_trade_pct,
     DROP COLUMN IF EXISTS risk_config;
-
--- Drop the public view that referenced the removed columns, then recreate
-DROP VIEW IF EXISTS agents_public;
 
 CREATE VIEW agents_public AS
 SELECT

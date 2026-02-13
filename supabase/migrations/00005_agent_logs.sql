@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS public.agent_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_agent_logs_agent_id ON public.agent_logs(agent_id);
-CREATE INDEX idx_agent_logs_created_at ON public.agent_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_logs_agent_id ON public.agent_logs(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_logs_created_at ON public.agent_logs(created_at DESC);
 
 ALTER TABLE public.agent_logs ENABLE ROW LEVEL SECURITY;
 
