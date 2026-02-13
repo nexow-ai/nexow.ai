@@ -172,11 +172,136 @@ export type Database = {
           status?: "active" | "paused";
         };
       };
+      subscriptions: {
+        Row: {
+          id: string;
+          user_id: string;
+          tier: "free" | "starter" | "pro" | "elite";
+          status: "active" | "canceled" | "past_due" | "trialing" | "incomplete";
+          stripe_customer_id: string | null;
+          stripe_subscription_id: string | null;
+          stripe_price_id: string | null;
+          current_period_start: string | null;
+          current_period_end: string | null;
+          cancel_at_period_end: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          tier?: "free" | "starter" | "pro" | "elite";
+          status?: "active" | "canceled" | "past_due" | "trialing" | "incomplete";
+          stripe_customer_id?: string | null;
+          stripe_subscription_id?: string | null;
+          stripe_price_id?: string | null;
+          current_period_start?: string | null;
+          current_period_end?: string | null;
+          cancel_at_period_end?: boolean;
+        };
+        Update: {
+          tier?: "free" | "starter" | "pro" | "elite";
+          status?: "active" | "canceled" | "past_due" | "trialing" | "incomplete";
+          stripe_customer_id?: string | null;
+          stripe_subscription_id?: string | null;
+          stripe_price_id?: string | null;
+          current_period_start?: string | null;
+          current_period_end?: string | null;
+          cancel_at_period_end?: boolean;
+        };
+      };
+      ai_credits: {
+        Row: {
+          id: string;
+          user_id: string;
+          credits_limit: number;
+          credits_used: number;
+          period_start: string;
+          period_end: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          credits_limit?: number;
+          credits_used?: number;
+          period_start?: string;
+          period_end?: string;
+        };
+        Update: {
+          credits_limit?: number;
+          credits_used?: number;
+          period_start?: string;
+          period_end?: string;
+        };
+      };
+      credit_usage_log: {
+        Row: {
+          id: string;
+          user_id: string;
+          agent_id: string | null;
+          action: string;
+          credits_used: number;
+          description: string | null;
+          created_at: string;
+        };
+        Insert: {
+          user_id: string;
+          agent_id?: string | null;
+          action: string;
+          credits_used: number;
+          description?: string | null;
+        };
+        Update: {
+          action?: string;
+          credits_used?: number;
+          description?: string | null;
+        };
+      };
+      agent_logs: {
+        Row: {
+          id: string;
+          agent_id: string;
+          level: string;
+          message: string;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          agent_id: string;
+          level?: string;
+          message: string;
+          metadata?: Json;
+        };
+        Update: {
+          level?: string;
+          message?: string;
+          metadata?: Json;
+        };
+      };
     };
     Functions: {
       check_username_available: {
         Args: { desired_username: string };
         Returns: boolean;
+      };
+      consume_credits: {
+        Args: {
+          p_user_id: string;
+          p_amount: number;
+          p_action: string;
+          p_agent_id?: string | null;
+          p_description?: string | null;
+        };
+        Returns: boolean;
+      };
+      reset_user_credits: {
+        Args: {
+          p_user_id: string;
+          p_new_limit: number;
+          p_period_start: string;
+          p_period_end: string;
+        };
+        Returns: void;
       };
     };
   };
