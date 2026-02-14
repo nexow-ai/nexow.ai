@@ -31,5 +31,9 @@ class Settings(BaseSettings):
     tick_interval_seconds: float = 5.0
     log_level: str = "INFO"
 
+    # API (backtest endpoint)
+    api_host: str = "0.0.0.0"
+    api_port: int = 8100
+
 
 settings = Settings()  # type: ignore[call-arg]

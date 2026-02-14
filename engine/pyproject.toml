@@ -18,6 +18,9 @@ dependencies = [
     "ta",
     "python-dotenv",
     "structlog",
+    "fastapi",
+    "uvicorn[standard]",
+    "sse-starlette",
 ]
 
 [project.optional-dependencies]

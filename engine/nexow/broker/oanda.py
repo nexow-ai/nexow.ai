@@ -77,6 +77,94 @@ class OandaClient:
             )
         return candles
 
+    async def get_candles_range(
+        self,
+        instrument: str,
+        granularity: str,
+        from_time: datetime,
+        to_time: datetime,
+    ) -> list[Candle]:
+        """
+        Fetch candles for a date range, paginating in chunks of 5000.
+
+        Oanda v20 allows max 5000 candles per request. The API does NOT
+        accept ``from``, ``to``, and ``count`` together — so we paginate
+        forward using ``from`` + ``count`` only and stop once we pass
+        ``to_time``.
+        """
+        url = f"{self.account_url}/instruments/{instrument}/candles"
+        all_candles: list[Candle] = []
+        cursor = from_time
+
+        while cursor < to_time:
+            # Oanda rejects requests that combine from + to + count.
+            # Use from + count to paginate forward, then trim afterward.
+            params: dict[str, str | int] = {
+                "granularity": granularity,
+                "price": "M",
+                "from": cursor.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "count": 5000,
+            }
+
+            resp = await self._http.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            raw_candles = data.get("candles", [])
+            if not raw_candles:
+                break
+
+            batch: list[Candle] = []
+            for c in raw_candles:
+                if not c.get("complete", False):
+                    continue
+                mid = c["mid"]
+                candle = Candle(
+                    instrument=instrument,
+                    time=datetime.fromisoformat(c["time"].replace("Z", "+00:00")),
+                    open=float(mid["o"]),
+                    high=float(mid["h"]),
+                    low=float(mid["l"]),
+                    close=float(mid["c"]),
+                    volume=int(c["volume"]),
+                )
+                # Stop collecting once past the requested end time
+                if candle.time.replace(tzinfo=None) > to_time.replace(tzinfo=None):
+                    break
+                batch.append(candle)
+
+            if not batch:
+                break
+
+            all_candles.extend(batch)
+
+            # Advance cursor past the last candle we received
+            last_time = batch[-1].time.replace(tzinfo=None)
+            if last_time <= cursor.replace(tzinfo=None):
+                # No progress — avoid infinite loop
+                break
+            cursor = last_time.replace(tzinfo=from_time.tzinfo)
+
+            # If this batch was shorter than 5000, we've reached the end
+            if len(raw_candles) < 5000:
+                break
+
+            logger.debug(
+                "candles_range_page",
+                instrument=instrument,
+                fetched=len(batch),
+                total=len(all_candles),
+                cursor=cursor.isoformat(),
+            )
+
+        logger.info(
+            "candles_range_complete",
+            instrument=instrument,
+            granularity=granularity,
+            total_candles=len(all_candles),
+        )
+        return all_candles
+
     async def get_price(self, instrument: str) -> float:
         """Get the current midpoint price for an instrument."""
         url = f"{self.account_url}/pricing"

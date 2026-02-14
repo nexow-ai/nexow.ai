@@ -3,6 +3,10 @@ Rule Interpreter — evaluates a JSON rule tree against live market data.
 
 This is the core of the dynamic strategy engine. The AI generates
 the rules, this module executes them.
+
+Supports multi-timeframe evaluation: each condition can specify a
+"timeframe" param to target a specific MarketSnapshot within a
+MultiSnapshot container.
 """
 
 from __future__ import annotations
@@ -109,13 +113,52 @@ class MarketSnapshot:
 
 
 # ──────────────────────────────────────────────────────────
+# Multi-timeframe snapshot container
+# ──────────────────────────────────────────────────────────
+
+class MultiSnapshot:
+    """
+    Wraps multiple MarketSnapshots keyed by timeframe.
+
+    Each condition can include a "timeframe" param to select which
+    snapshot it evaluates against. Conditions without the param
+    use the default (primary/fastest) timeframe.
+    """
+
+    def __init__(self, snapshots: dict[str, MarketSnapshot], default_tf: str) -> None:
+        self.snapshots = snapshots
+        self.default_tf = default_tf
+
+    def get(self, timeframe: str | None = None) -> MarketSnapshot:
+        """Get the snapshot for a given timeframe, falling back to default."""
+        tf = timeframe or self.default_tf
+        return self.snapshots.get(tf, self.snapshots[self.default_tf])
+
+    @property
+    def price(self) -> float:
+        return self.snapshots[self.default_tf].price
+
+    @property
+    def open_trade_count(self) -> int:
+        return self.snapshots[self.default_tf].open_trade_count
+
+
+# ──────────────────────────────────────────────────────────
 # Condition evaluators
 # ──────────────────────────────────────────────────────────
 
-def _eval_condition(condition: Condition, snap: MarketSnapshot) -> bool:
-    """Evaluate a single atomic condition."""
+def _eval_condition(condition: Condition, multi: MultiSnapshot) -> bool:
+    """Evaluate a single atomic condition.
+
+    The condition's params may include a "timeframe" key to select
+    which snapshot to evaluate against. If absent, the default
+    (primary) timeframe is used.
+    """
     t = condition.type
     p = condition.params
+
+    # Resolve the right snapshot for this condition's timeframe
+    snap = multi.get(p.get("timeframe"))
 
     # ── Price conditions ──
     if t == "price_above":
@@ -293,11 +336,11 @@ def _eval_condition(condition: Condition, snap: MarketSnapshot) -> bool:
         n = int(p.get("n", 1))
         return snap.tick_count % n == 0
 
-    # ── Meta ──
+    # ── Meta (uses the multi-snapshot's global state) ──
     if t == "has_no_open_trades":
-        return snap.open_trade_count == 0
+        return multi.open_trade_count == 0
     if t == "has_open_trades":
-        return snap.open_trade_count > 0
+        return multi.open_trade_count > 0
 
     logger.warning("unknown_condition_type", type=t)
     return False
@@ -307,7 +350,7 @@ def _eval_condition(condition: Condition, snap: MarketSnapshot) -> bool:
 # Rule group evaluator (recursive)
 # ──────────────────────────────────────────────────────────
 
-def eval_rule_group(group: RuleGroup | dict, snap: MarketSnapshot) -> bool:
+def eval_rule_group(group: RuleGroup | dict, multi: MultiSnapshot) -> bool:
     """Recursively evaluate a rule group."""
     if isinstance(group, dict):
         group = RuleGroup(**group)
@@ -324,13 +367,13 @@ def eval_rule_group(group: RuleGroup | dict, snap: MarketSnapshot) -> bool:
         if isinstance(item, dict):
             # Could be Condition or nested RuleGroup
             if "operator" in item:
-                results.append(eval_rule_group(RuleGroup(**item), snap))
+                results.append(eval_rule_group(RuleGroup(**item), multi))
             else:
-                results.append(_eval_condition(Condition(**item), snap))
+                results.append(_eval_condition(Condition(**item), multi))
         elif isinstance(item, RuleGroup):
-            results.append(eval_rule_group(item, snap))
+            results.append(eval_rule_group(item, multi))
         elif isinstance(item, Condition):
-            results.append(_eval_condition(item, snap))
+            results.append(_eval_condition(item, multi))
 
     if not results:
         return op == "always"
@@ -345,25 +388,37 @@ def eval_rule_group(group: RuleGroup | dict, snap: MarketSnapshot) -> bool:
     return False
 
 
-def evaluate_rules(rules: TradingRules | dict, snap: MarketSnapshot) -> str:
+def evaluate_rules(
+    rules: TradingRules | dict,
+    snap_or_multi: MarketSnapshot | MultiSnapshot,
+) -> str:
     """
     Evaluate the full trading rules and return the action.
+
+    Accepts either a single MarketSnapshot (backwards compatible) or
+    a MultiSnapshot for multi-timeframe evaluation.
 
     Returns: "buy", "sell", "close", or "hold"
     """
     if isinstance(rules, dict):
         rules = TradingRules(**rules)
 
+    # Wrap single snapshot for backwards compatibility
+    if isinstance(snap_or_multi, MarketSnapshot):
+        snap_or_multi = MultiSnapshot({"default": snap_or_multi}, "default")
+
+    multi = snap_or_multi
+
     # Check close rules first
-    if rules.close_rules and eval_rule_group(rules.close_rules, snap):
+    if rules.close_rules and eval_rule_group(rules.close_rules, multi):
         return "close"
 
     # Check buy rules
-    if eval_rule_group(rules.buy_rules, snap):
+    if eval_rule_group(rules.buy_rules, multi):
         return "buy"
 
     # Check sell rules
-    if eval_rule_group(rules.sell_rules, snap):
+    if eval_rule_group(rules.sell_rules, multi):
         return "sell"
 
     return "hold"
