@@ -97,14 +97,28 @@ Available condition types:
 
 ## Config structure for SYSTEMATIC:
 
-Each condition can optionally include a "timeframe" param to specify which timeframe it applies to.
-The portfolio instruments array should list every instrument+timeframe combination the agent needs data for.
+The portfolio instruments array MUST list every instrument+timeframe combination the agent needs data for.
+The engine builds a separate MarketSnapshot per timeframe, so conditions on different timeframes evaluate independently.
 
+CRITICAL — MULTI-TIMEFRAME RULES:
+When a strategy references multiple timeframes (e.g. "M5 candles are red and H4 is green"), EVERY condition
+MUST include a "timeframe" param matching one of the portfolio instrument entries.
+Without it, all conditions evaluate against the primary (fastest) timeframe and may contradict each other.
+
+Example of CORRECT multi-timeframe rules:
 {
   "portfolio": {"instruments": [{"instrument": "EUR_USD", "timeframe": "M15"}, {"instrument": "EUR_USD", "timeframe": "H4"}]},
   "rules": {
-    "buy_rules": {"operator": "and", "conditions": [...]},
-    "sell_rules": {"operator": "and", "conditions": [...]}
+    "buy_rules": {"operator": "and", "conditions": [
+      {"type": "consecutive_red", "params": {"count": 3, "timeframe": "M15"}},
+      {"type": "candle_is_green", "params": {"timeframe": "H4"}},
+      {"type": "rsi_below", "params": {"threshold": 40, "period": 14, "timeframe": "M15"}}
+    ]},
+    "sell_rules": {"operator": "and", "conditions": [
+      {"type": "consecutive_green", "params": {"count": 3, "timeframe": "M15"}},
+      {"type": "candle_is_red", "params": {"timeframe": "H4"}},
+      {"type": "rsi_above", "params": {"threshold": 60, "period": 14, "timeframe": "M15"}}
+    ]}
   },
   "exit": {
     "stop_loss_pct": 2.0,
@@ -115,12 +129,15 @@ The portfolio instruments array should list every instrument+timeframe combinati
   }
 }
 
+If only ONE timeframe is referenced, the "timeframe" param is optional (defaults to the primary TF).
+If the user does not mention any specific timeframe, default to H1 and omit the "timeframe" params.
+
 ## For DISCRETIONARY agents, config includes: llm_provider, llm_model, personality, focus_areas, use_web_search, use_news_feed, evaluation_schedule, portfolio, exit
 
 Use the EXACT instruments the user selected. Determine timeframes from the entry/exit description.
 Use the exit values the user specified (stop_loss_pct, take_profit_pct, etc) — do NOT invent different values.
 
-IMPORTANT: Always generate both buy_rules AND sell_rules for systematic agents. Always include an "exit" object. Only return valid JSON.`;
+IMPORTANT: Always generate both buy_rules AND sell_rules for systematic agents. Always include an "exit" object. Only use condition types from the Available list above — do NOT invent new types. Only return valid JSON.`;
 
   try {
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {

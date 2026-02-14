@@ -19,9 +19,11 @@ import { createClient } from "@/lib/supabase/client";
 import { useAgent } from "@/hooks/use-agents";
 import { useTrades } from "@/hooks/use-trades";
 import type { InstrumentConfig } from "@/lib/types/database";
-import { Loader2, Pause, Play, Trash2 } from "lucide-react";
+import { BarChart3, Loader2, Pause, Play, Radio, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
+
+type TradeView = "live" | "backtest";
 
 interface AgentDetailPageProps {
   params: Promise<{ id: string }>;
@@ -37,6 +39,9 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
     refetch: refetchTrades,
   } = useTrades(id);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Trade view toggle: live vs backtest
+  const [tradeView, setTradeView] = useState<TradeView>("live");
 
   // Live prices per instrument (for accurate PnL on all open trades)
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -142,7 +147,21 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
     );
   }
 
-  const closedTrades = trades.filter((t) => t.status === "closed");
+  // Split trades into live and backtest
+  const liveTrades = useMemo(
+    () => trades.filter((t) => !t.backtest_id),
+    [trades]
+  );
+  const backtestTrades = useMemo(
+    () => trades.filter((t) => !!t.backtest_id),
+    [trades]
+  );
+  const hasBacktestData = backtestTrades.length > 0;
+
+  // Use filtered trades for current view
+  const viewTrades = tradeView === "live" ? liveTrades : backtestTrades;
+
+  const closedTrades = viewTrades.filter((t) => t.status === "closed");
   const winningTrades = closedTrades.filter((t) => (t.return_pct ?? 0) > 0);
   const totalReturn = closedTrades.reduce(
     (sum, t) => sum + (t.return_pct ?? 0),
@@ -219,6 +238,34 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
         </div>
       </div>
 
+      {/* Live / Backtest toggle */}
+      {hasBacktestData && (
+        <div className="flex items-center gap-1 rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-1 w-fit">
+          <button
+            onClick={() => setTradeView("live")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              tradeView === "live"
+                ? "bg-emerald-500/15 text-emerald-400"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <Radio className="h-3 w-3" />
+            Live ({liveTrades.length})
+          </button>
+          <button
+            onClick={() => setTradeView("backtest")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              tradeView === "backtest"
+                ? "bg-purple-500/15 text-purple-400"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <BarChart3 className="h-3 w-3" />
+            Backtest ({backtestTrades.length})
+          </button>
+        </div>
+      )}
+
       {/* Performance stats */}
       <div className="stagger-children grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         {[
@@ -231,11 +278,11 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
             value: `${avgReturn >= 0 ? "+" : ""}${avgReturn.toFixed(2)}%`,
           },
           { label: "Win Rate", value: `${winRate.toFixed(1)}%` },
-          { label: "Trades", value: String(trades.length) },
+          { label: "Trades", value: String(viewTrades.length) },
           {
             label: "Open",
             value: String(
-              trades.filter((t) => t.status === "open").length
+              viewTrades.filter((t) => t.status === "open").length
             ),
           },
         ].map((stat) => (
@@ -288,16 +335,24 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
 
       {/* Trades table */}
       <Card>
-        <CardTitle>Signal History</CardTitle>
+        <CardTitle>
+          {tradeView === "backtest" ? "Backtest History" : "Signal History"}
+          {tradeView === "backtest" && (
+            <Badge variant="default" className="ml-2">
+              backtest
+            </Badge>
+          )}
+        </CardTitle>
         <CardContent className="mt-4">
           {tradesLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
             </div>
-          ) : trades.length === 0 ? (
+          ) : viewTrades.length === 0 ? (
             <p className="py-8 text-center text-sm text-zinc-500">
-              No signals yet. Agent will start generating signals when market
-              conditions match.
+              {tradeView === "backtest"
+                ? "No backtest data available for this agent."
+                : "No signals yet. Agent will start generating signals when market conditions match."}
             </p>
           ) : (
             <Table>
@@ -314,7 +369,7 @@ export default function AgentDetailPage({ params }: AgentDetailPageProps) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {trades.map((trade) => (
+                {viewTrades.map((trade) => (
                   <TableRow key={trade.id}>
                     <TableCell className="text-xs">
                       {new Date(trade.opened_at).toLocaleString()}

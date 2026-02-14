@@ -19,7 +19,7 @@ export function useTrades(agentId?: string) {
       .from("trades")
       .select("*")
       .order("opened_at", { ascending: false })
-      .limit(50);
+      .limit(500);
 
     if (agentId) {
       query = query.eq("agent_id", agentId);

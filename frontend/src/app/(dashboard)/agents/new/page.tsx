@@ -1,5 +1,6 @@
 "use client";
 
+import { BacktestPanel } from "@/components/backtest/backtest-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { RuleDisplay } from "@/components/agents/rule-display";
+import { useBacktest } from "@/hooks/use-backtest";
 import { useSubscription } from "@/hooks/use-subscription";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -55,13 +57,14 @@ import { useEffect, useMemo, useState } from "react";
 // Types
 // ---------------------------------------------------------------------------
 
-type WizardStep = "assets" | "entry" | "exit" | "review";
+type WizardStep = "assets" | "entry" | "exit" | "review" | "backtest";
 
 const STEPS: { key: WizardStep; label: string }[] = [
   { key: "assets", label: "Assets" },
   { key: "entry", label: "Entry" },
   { key: "exit", label: "Exit" },
   { key: "review", label: "Review" },
+  { key: "backtest", label: "Backtest" },
 ];
 
 type AgentType = "systematic" | "discretionary";
@@ -178,6 +181,9 @@ export default function NewAgentPage() {
   const [deploying, setDeploying] = useState(false);
   const [generated, setGenerated] = useState<GeneratedAgent | null>(null);
   const [error, setError] = useState("");
+
+  // Step 5: Backtest
+  const { state: backtestState, runBacktest, reset: resetBacktest } = useBacktest();
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -367,6 +373,144 @@ export default function NewAgentPage() {
 
       if (insertError) throw insertError;
       router.push(`/agents/${(data as { id: string }).id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deploy failed");
+      setDeploying(false);
+    }
+  }
+
+  async function handleDeployWithBacktest() {
+    if (!generated) return;
+    setError("");
+    setDeploying(true);
+
+    try {
+      const supabase = createClient();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      const config = { ...generated.config };
+      const instrumentsArr = Array.from(selectedInstruments);
+      const primaryInstrument = instrumentsArr[0] ?? "EUR_USD";
+
+      const portfolio = (config as Record<string, unknown>).portfolio as
+        | Record<string, unknown>
+        | undefined;
+      const configInstruments = (portfolio?.instruments ?? []) as Array<
+        Record<string, unknown>
+      >;
+      const primaryTimeframe =
+        (configInstruments[0]?.timeframe as string) ?? "H1";
+
+      const uniqueInstruments = instrumentsArr.map((id) => {
+        const match = configInstruments.find(
+          (ci) => ci.instrument === id
+        );
+        return {
+          instrument: id,
+          timeframe: (match?.timeframe as string) ?? "H1",
+        };
+      });
+
+      // 1. Insert the agent
+      const { data: agentData, error: insertError } = await (
+        supabase.from as Function
+      )("agents")
+        .insert({
+          creator_id: user.id,
+          name: generated.name,
+          description: generated.description,
+          type: generated.agent_type,
+          config,
+          prompt: buildPrompt(),
+          instrument: primaryInstrument,
+          instruments: uniqueInstruments,
+          timeframe: primaryTimeframe,
+          llm_provider:
+            (config as Record<string, unknown>).llm_provider ?? "openai",
+          llm_model:
+            (config as Record<string, unknown>).llm_model ?? "gpt-4o-mini",
+          status: "active",
+        })
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+      const agentId = (agentData as { id: string }).id;
+
+      // 2. If backtest completed, save backtest record and trades
+      if (
+        backtestState.phase === "complete" &&
+        backtestState.result
+      ) {
+        const bt = backtestState.result;
+
+        // Insert backtest record
+        const { data: btData, error: btError } = await (
+          supabase.from as Function
+        )("backtests")
+          .insert({
+            agent_id: agentId,
+            creator_id: user.id,
+            config: generated.config,
+            instruments: uniqueInstruments,
+            exit_config: {
+              stop_loss_pct: exitConfig.stop_loss_pct
+                ? parseFloat(exitConfig.stop_loss_pct)
+                : null,
+              take_profit_pct: exitConfig.take_profit_pct
+                ? parseFloat(exitConfig.take_profit_pct)
+                : null,
+            },
+            period_start: new Date(
+              Date.now() - 365 * 24 * 60 * 60 * 1000
+            ).toISOString(),
+            period_end: new Date().toISOString(),
+            status: "completed",
+            progress_pct: 100,
+            total_trades: bt.stats.total_trades,
+            total_return_pct: bt.stats.total_return_pct,
+            win_rate: bt.stats.win_rate,
+            max_drawdown: bt.stats.max_drawdown,
+            sharpe_ratio: bt.stats.sharpe_ratio,
+            profit_factor: bt.stats.profit_factor,
+            equity_curve: bt.equity_curve,
+          })
+          .select()
+          .single();
+
+        if (btError) {
+          console.error("Failed to save backtest:", btError);
+        } else if (bt.trades.length > 0) {
+          const backtestId = (btData as { id: string }).id;
+
+          // Bulk insert backtest trades
+          const tradeRecords = bt.trades.map((t) => ({
+            agent_id: agentId,
+            backtest_id: backtestId,
+            instrument: t.instrument,
+            direction: t.direction,
+            entry_price: t.entry_price,
+            exit_price: t.exit_price,
+            return_pct: t.return_pct,
+            stop_loss_pct: t.stop_loss_pct,
+            take_profit_pct: t.take_profit_pct,
+            status: t.status,
+            opened_at: t.entry_time,
+            closed_at: t.exit_time,
+          }));
+
+          // Insert in batches of 100
+          for (let i = 0; i < tradeRecords.length; i += 100) {
+            const batch = tradeRecords.slice(i, i + 100);
+            await (supabase.from as Function)("trades").insert(batch);
+          }
+        }
+      }
+
+      router.push(`/agents/${agentId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deploy failed");
       setDeploying(false);
@@ -1275,15 +1419,30 @@ export default function NewAgentPage() {
                   <Sparkles className="h-4 w-4" />
                   Regenerate
                 </Button>
-                <Button
-                  className="flex-1"
-                  onClick={handleDeploy}
-                  loading={deploying}
-                  size="lg"
-                >
-                  <Rocket className="h-4 w-4" />
-                  Deploy Agent
-                </Button>
+                {agentType === "systematic" ? (
+                  <Button
+                    className="flex-1"
+                    onClick={() => {
+                      resetBacktest();
+                      setStep("backtest");
+                    }}
+                    size="lg"
+                  >
+                    <BarChart3 className="h-4 w-4" />
+                    Backtest & Deploy
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    className="flex-1"
+                    onClick={handleDeploy}
+                    loading={deploying}
+                    size="lg"
+                  >
+                    <Rocket className="h-4 w-4" />
+                    Deploy Agent
+                  </Button>
+                )}
               </div>
             </div>
           )}
@@ -1298,6 +1457,59 @@ export default function NewAgentPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ================================================================== */}
+      {/* STEP 5: BACKTEST                                                    */}
+      {/* ================================================================== */}
+      {step === "backtest" && generated && (
+        <BacktestPanel
+          state={backtestState}
+          onRunBacktest={() => {
+            if (!generated) return;
+            const instrumentsArr = Array.from(selectedInstruments);
+            const config = generated.config as Record<string, unknown>;
+            const portfolio = config.portfolio as
+              | Record<string, unknown>
+              | undefined;
+            const configInstruments = (portfolio?.instruments ?? []) as Array<
+              Record<string, unknown>
+            >;
+
+            const backtestInstruments = instrumentsArr.map((id) => {
+              const match = configInstruments.find(
+                (ci) => ci.instrument === id
+              );
+              return {
+                instrument: id,
+                timeframe: (match?.timeframe as string) ?? "H1",
+              };
+            });
+
+            runBacktest({
+              config: generated.config,
+              instruments: backtestInstruments,
+              exit_config: {
+                stop_loss_pct: exitConfig.stop_loss_pct
+                  ? parseFloat(exitConfig.stop_loss_pct)
+                  : null,
+                take_profit_pct: exitConfig.take_profit_pct
+                  ? parseFloat(exitConfig.take_profit_pct)
+                  : null,
+              },
+              period_days: 365,
+            });
+          }}
+          onDeploy={async () => {
+            await handleDeployWithBacktest();
+          }}
+          onBack={() => setStep("review")}
+          onCancel={() => {
+            resetBacktest();
+            setStep("review");
+          }}
+          deployLoading={deploying}
+        />
       )}
     </div>
   );

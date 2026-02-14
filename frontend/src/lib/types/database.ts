@@ -103,6 +103,7 @@ export type Database = {
           status: "open" | "closed";
           opened_at: string;
           closed_at: string | null;
+          backtest_id: string | null;
         };
         Insert: {
           agent_id: string;
@@ -112,12 +113,18 @@ export type Database = {
           status?: "open" | "closed";
           stop_loss_pct?: number | null;
           take_profit_pct?: number | null;
+          backtest_id?: string | null;
+          opened_at?: string;
+          closed_at?: string | null;
+          exit_price?: number | null;
+          return_pct?: number | null;
         };
         Update: {
           status?: "open" | "closed";
           exit_price?: number | null;
           return_pct?: number | null;
           closed_at?: string | null;
+          backtest_id?: string | null;
         };
       };
       agent_performance: {
@@ -276,6 +283,53 @@ export type Database = {
           level?: string;
           message?: string;
           metadata?: Json;
+        };
+      };
+      backtests: {
+        Row: {
+          id: string;
+          agent_id: string | null;
+          creator_id: string;
+          config: Json;
+          instruments: Json;
+          exit_config: Json;
+          period_start: string;
+          period_end: string;
+          status: "running" | "completed" | "failed";
+          progress_pct: number;
+          total_trades: number | null;
+          total_return_pct: number | null;
+          win_rate: number | null;
+          max_drawdown: number | null;
+          sharpe_ratio: number | null;
+          profit_factor: number | null;
+          equity_curve: Json;
+          error_message: string | null;
+          created_at: string;
+        };
+        Insert: {
+          agent_id?: string | null;
+          creator_id: string;
+          config: Json;
+          instruments: Json;
+          exit_config?: Json;
+          period_start: string;
+          period_end: string;
+          status?: "running" | "completed" | "failed";
+          progress_pct?: number;
+        };
+        Update: {
+          agent_id?: string | null;
+          status?: "running" | "completed" | "failed";
+          progress_pct?: number;
+          total_trades?: number | null;
+          total_return_pct?: number | null;
+          win_rate?: number | null;
+          max_drawdown?: number | null;
+          sharpe_ratio?: number | null;
+          profit_factor?: number | null;
+          equity_curve?: Json;
+          error_message?: string | null;
         };
       };
     };
